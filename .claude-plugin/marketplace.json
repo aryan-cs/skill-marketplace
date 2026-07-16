@@ -1,0 +1,16 @@
+{
+  "name": "aryan-skills",
+  "owner": {
+    "name": "Aryan Gupta"
+  },
+  "description": "Aryan's personal skill marketplace.",
+  "plugins": [
+    {
+      "name": "personal",
+      "source": "./plugins/personal",
+      "description": "Personal collection of skills.",
+      "category": "productivity",
+      "keywords": ["personal", "productivity"]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Claude Code local-scope installs (not meant to be shared)
+.claude/settings.local.json
+
+# Bundled runtime junk (if a skill ever ships JS/Python deps)
+node_modules/
+__pycache__/
+*.pyc
+
+# Logs
+*.log

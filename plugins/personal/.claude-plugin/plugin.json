@@ -1,0 +1,10 @@
+{
+  "name": "personal",
+  "description": "Personal collection of skills.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Aryan Gupta"
+  },
+  "license": "MIT",
+  "keywords": ["personal", "productivity"]
+}
