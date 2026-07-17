@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-07-17
+
+### Fixed
+- `setup-claude-code`: the `agent-yes` wrapper broke `claude` with `env: bun: No such file or directory` because `ay` is a Bun script (`#!/usr/bin/env bun`) but `setup.sh` only installed it via npm and never ensured the Bun runtime. `setup.sh` now installs Bun user-local at `~/.bun` (no sudo), adds a `bun runtime` PATH block, and falls back to `bun install -g agent-yes` when npm is absent (e.g. a machine that only has Codex's bundled `node`, which ships no npm). Downloads now go to a scratch dir removed on exit via a trap, so setup leaves no temp files behind. Documented the Bun dependency in `SKILL.md`/`reference.md` and added a "clean up temp files" step to the skill.
+
 ## [0.3.0] - 2026-07-17
 
 ### Changed
