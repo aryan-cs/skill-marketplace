@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-07-17
+
+### Changed
+- Renamed the `setup-cc` skill to `setup-claude-code`. Claude Code does not reserve "claude"/"anthropic" in skill names (verified — it loads as `personal:setup-claude-code`); the abbreviation was only working around this repo's own scaffold rule. Relaxed that rule in `scripts/new-skill.sh` and `docs/authoring-skills.md` so a tool-specific skill can be named for its tool.
+
 ## [0.2.0] - 2026-07-16
 
 ### Added

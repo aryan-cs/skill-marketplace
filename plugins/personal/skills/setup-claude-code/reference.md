@@ -1,4 +1,4 @@
-# setup-cc — background, the env-var facts, caveats, and reverting
+# setup-claude-code — background, the env-var facts, caveats, and reverting
 
 ## Why the default kept reverting
 

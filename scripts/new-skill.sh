@@ -20,13 +20,6 @@ if ! printf '%s' "$name" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'; then
   exit 1
 fi
 
-case "$name" in
-  *claude*|*anthropic*)
-    echo "error: a skill name may not contain 'claude' or 'anthropic' (reserved)." >&2
-    exit 1
-    ;;
-esac
-
 skill_dir="$skills_dir/$name"
 if [ -e "$skill_dir" ]; then
   echo "error: $skill_dir already exists." >&2

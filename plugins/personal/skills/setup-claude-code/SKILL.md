@@ -1,5 +1,5 @@
 ---
-name: setup-cc
+name: setup-claude-code
 description: Sets up Claude Code on a machine the way Aryan likes it — forces Opus as the default model and xhigh (the persistent, ultracode-equivalent) effort via shell env vars, installs agent-yes with the auto-approve `claude` wrapper, and adds keep-awake helpers so agents survive a closed laptop lid. Use when the user asks to set up Claude Code, configure a new machine/laptop, make Opus or xhigh/ultracode the default, stop the model reverting to Sonnet or medium effort on restart, install agent-yes, or keep Claude Code/Codex running when the lid is closed or the Mac sleeps.
 ---
 
@@ -10,7 +10,7 @@ Make **Opus + xhigh effort** the persistent default for Claude Code on this mach
 Why it's needed: an org can push a *remote-managed* policy (`~/.claude/remote-settings.json`) that pins the default model to Sonnet and effort to medium. That policy outranks `~/.claude/settings.json`, so editing settings there doesn't stick. The fix is two **input** environment variables that override the *soft* org default. Full background, the env-var facts, and caveats are in [reference.md](reference.md) — read it if anything below is surprising or fails.
 
 All deterministic work is in three tested scripts beside this file. Run them by absolute path —
-`bash "${CLAUDE_PLUGIN_ROOT}/skills/setup-cc/scripts/<name>"`, or resolve `scripts/<name>`
+`bash "${CLAUDE_PLUGIN_ROOT}/skills/setup-claude-code/scripts/<name>"`, or resolve `scripts/<name>`
 relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent their commands.
 
 ## Steps
@@ -49,7 +49,6 @@ blocks and marker names) — never hand-append without the marker blocks, or re-
 ## Notes
 
 - **"ultracode":** `xhigh` is the persistent effort this sets. Ultracode's *standing workflow orchestration* is session-scoped by design — trigger it per session with `/effort` or the `ultracode` keyword. There is no persistent "ultracode" setting; `xhigh` is the durable equivalent.
-- **Name:** a skill name may not contain "claude" (reserved), so this is `setup-cc` (cc = Claude Code), not `setup-claude-code`.
 - **agent-yes auto-approves tool prompts** — a trust decision. If the user doesn't want unattended approvals, install the defaults block but skip the agent-yes wrapper.
 - **Keep-awake is macOS-only** (`caffeinate`, `pmset`). On other platforms skip block 4; the model/effort/agent-yes parts still apply.
 - **`lidawake on` disables sleep globally** until `lidawake off` — prefer AC power (a lidded Mac that never sleeps can run hot in a bag and drain the battery).
