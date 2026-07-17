@@ -29,11 +29,23 @@ Verified empirically: both `--model opus` and `ANTHROPIC_MODEL=opus` resolve to
 
 - `ANTHROPIC_MODEL="opus"` — sets the default model. The alias `opus` tracks the latest Opus;
   pin `claude-opus-4-8` instead for an exact version.
-- `CLAUDE_CODE_EFFORT_LEVEL="xhigh"` — the real effort input var. It outranks even an
-  in-session `/effort` choice.
+- `CLAUDE_CODE_EFFORT_LEVEL="xhigh"` — the real effort input var and the effort **floor** for
+  non-interactive/subagent runs and `command claude`. It outranks even an in-session `/effort` choice.
 
 Do **not** use `CLAUDE_EFFORT` for this — that one is *output only*: the CLI *exports* it for
 hooks and subagents to read (`t.CLAUDE_EFFORT = effortLevel`), but never reads it as an input.
+
+### Full ultracode is the interactive default — set by the wrapper flag, not the env var
+
+Ultracode = xhigh effort **plus** standing workflow orchestration, and it is *session-scoped* by
+design. Its value is **not** accepted by `CLAUDE_CODE_EFFORT_LEVEL`: set the env var to `ultracode`
+and the parser silently drops it to **medium** — a regression, not an upgrade. (Verified: `ultracode`
+as an env value gives identical reasoning-token volume to `medium`; the effort parser only aliases
+`med→medium`, never `ultracode`.) The one persistent mechanism is the **`--effort ultracode` flag**
+on each launch, which the `claude()` wrapper adds. Verified empirically: under `--effort ultracode`
+the model receives the live *"Ultracode is on…"* system context and higher thinking volume; under the
+env var or plain `xhigh` it does not. Pass your own `--effort X` to override (last wins), or
+`command claude` to fall back to the xhigh env floor.
 
 If the org later sets `enforceAvailableModels: true` or drops `opus` from `availableModels`,
 these overrides stop working and it becomes an admin request — nothing local will fix it.
@@ -45,7 +57,7 @@ replace rather than duplicate). In the shell profile:
 
 ```sh
 # >>> claude-code defaults >>>
-# Opus + xhigh (persistent equivalent of ultracode) as the Claude Code default.
+# Opus default model; xhigh = effort FLOOR (the interactive wrapper upgrades to full ultracode).
 export ANTHROPIC_MODEL="opus"
 export CLAUDE_CODE_EFFORT_LEVEL="xhigh"
 # <<< claude-code defaults <<<
@@ -59,15 +71,15 @@ export PATH="$HOME/.bun/bin:$PATH"
 claude() {
   if command -v caffeinate >/dev/null 2>&1; then
     if command -v ay >/dev/null 2>&1; then
-      caffeinate -dimsu ay claude -- "$@"
+      caffeinate -dimsu ay claude -- --effort ultracode "$@"
     else
-      caffeinate -dimsu claude "$@"
+      caffeinate -dimsu claude --effort ultracode "$@"
     fi
   else
     if command -v ay >/dev/null 2>&1; then
-      command ay claude -- "$@"
+      command ay claude -- --effort ultracode "$@"
     else
-      command claude "$@"
+      command claude --effort ultracode "$@"
     fi
   fi
 }

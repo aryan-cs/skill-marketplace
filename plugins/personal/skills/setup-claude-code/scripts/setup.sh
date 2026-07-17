@@ -81,8 +81,10 @@ ensure_bun() {
 echo "Profile: $PROFILE"
 
 # --- 1. model + effort defaults --------------------------------------------
-upsert_block "claude-code defaults" '# Opus + xhigh (persistent equivalent of ultracode) as the Claude Code default.
-# INPUT env vars that override a soft org-managed default. Revert: delete this block, then `exec $SHELL`.
+upsert_block "claude-code defaults" '# Opus as the default model; xhigh as the effort FLOOR for non-interactive / subagent
+# runs and `command claude`. INPUT env vars overriding a soft org-managed default. The interactive `claude`
+# wrapper upgrades to full ultracode via `--effort ultracode` — that value is NOT valid as an env var (it
+# silently drops to medium), so xhigh is the closest env-expressible floor. Revert: delete, then `exec $SHELL`.
 export ANTHROPIC_MODEL="opus"
 export CLAUDE_CODE_EFFORT_LEVEL="xhigh"'
 
@@ -130,20 +132,21 @@ fi
 # NOTE on the caffeinate branches: caffeinate execs its target via PATH, so `caffeinate ... claude`
 # runs the real binary, NOT this function (no recursion). The no-caffeinate fallbacks use
 # `command` to bypass the function. Lid-closed survival still needs `lidawake on` (see block 4).
-upsert_block "agent-yes" '# Route `claude` through agent-yes (auto-approves prompts) and hold a caffeinate
-# assertion so a run never idle-sleeps. Bypass once: command claude ...  (lid-closed: lidawake on)
+upsert_block "agent-yes" '# Route `claude` through agent-yes (auto-approves prompts), default to full ultracode
+# (`--effort ultracode` = xhigh effort + standing workflow orchestration), and hold a caffeinate assertion
+# so a run never idle-sleeps. Pass your own --effort to override (last wins); bypass all of it with `command claude`.
 claude() {
   if command -v caffeinate >/dev/null 2>&1; then
     if command -v ay >/dev/null 2>&1; then
-      caffeinate -dimsu ay claude -- "$@"
+      caffeinate -dimsu ay claude -- --effort ultracode "$@"
     else
-      caffeinate -dimsu claude "$@"
+      caffeinate -dimsu claude --effort ultracode "$@"
     fi
   else
     if command -v ay >/dev/null 2>&1; then
-      command ay claude -- "$@"
+      command ay claude -- --effort ultracode "$@"
     else
-      command claude "$@"
+      command claude --effort ultracode "$@"
     fi
   fi
 }'

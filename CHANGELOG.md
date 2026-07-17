@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-07-17
+
+### Changed
+- `setup-claude-code` now defaults the interactive `claude` wrapper to **full ultracode** (`--effort ultracode` = xhigh effort + standing workflow orchestration) instead of plain xhigh. `CLAUDE_CODE_EFFORT_LEVEL=xhigh` stays as the effort floor for `command claude` and subagents, because — verified empirically — `ultracode` is **not** a valid `CLAUDE_CODE_EFFORT_LEVEL` value: the effort parser only aliases `med→medium`, so `CLAUDE_CODE_EFFORT_LEVEL=ultracode` silently drops to *medium* (same reasoning-token volume as medium). Ultracode is session-scoped by design, so the per-launch `--effort ultracode` flag is the only persistent mechanism; `--effort ultracode` verifiably injects the live "Ultracode is on…" context where the env var and plain xhigh do not. Pass your own `--effort X` to override (last wins); subcommands and duplicate `--effort` are both safe.
+
 ## [0.3.1] - 2026-07-17
 
 ### Fixed
