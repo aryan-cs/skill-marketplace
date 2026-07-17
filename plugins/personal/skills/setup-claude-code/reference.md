@@ -50,6 +50,11 @@ export ANTHROPIC_MODEL="opus"
 export CLAUDE_CODE_EFFORT_LEVEL="xhigh"
 # <<< claude-code defaults <<<
 
+# >>> bun runtime >>>
+# Bun runtime — agent-yes (`ay`) is a Bun script (#!/usr/bin/env bun) and fails without it.
+export PATH="$HOME/.bun/bin:$PATH"
+# <<< bun runtime <<<
+
 # >>> agent-yes >>>
 claude() {
   if command -v caffeinate >/dev/null 2>&1; then
@@ -85,13 +90,28 @@ Note: `caffeinate ... claude` / `caffeinate ... codex` run the **real binaries**
 execs via PATH, so it never sees the shell function — no recursion). The no-`caffeinate`
 fallbacks use `command` to bypass the function.
 
-## agent-yes
+## agent-yes (runs on Bun)
 
-`agent-yes` is an npm global (`npm install -g agent-yes`) that provides the `ay` command and
-wraps Claude Code to auto-approve permission prompts for unattended runs. The `claude()`
-function routes `claude ...` through `ay claude -- ...`; bypass it once with
-`command claude ...`. This auto-approves tool actions — a trust decision — so only enable it
-where you're comfortable with that. Uninstall with `npm uninstall -g agent-yes`.
+`agent-yes` provides the `ay` command and wraps Claude Code to auto-approve permission prompts
+for unattended runs. The `claude()` function routes `claude ...` through `ay claude -- ...`;
+bypass it once with `command claude ...`. This auto-approves tool actions — a trust decision —
+so only enable it where you're comfortable with that.
+
+**It requires the Bun runtime.** `ay` (and every `*-yes` bin) starts with `#!/usr/bin/env bun`,
+so with only Node installed it fails at runtime — the wrapper never launches Claude Code:
+
+```
+env: bun: No such file or directory
+```
+
+…even though the package's `engines` field claims `node>=22`. `setup.sh` therefore installs Bun
+user-local at `~/.bun` (no sudo, via the `bun-<os>-<arch>.zip` release) and adds `~/.bun/bin` to
+PATH through the `bun runtime` block. It then installs agent-yes with `npm install -g agent-yes`
+— or, when npm is absent (e.g. a box that only has Codex's bundled `node`, which ships no npm),
+with `bun install -g agent-yes` into `~/.bun/bin`.
+
+Uninstall agent-yes with `npm uninstall -g agent-yes` (or `bun remove -g agent-yes`); remove Bun
+with `rm -rf ~/.bun` and delete the `bun runtime` block.
 
 ## Keeping agents running with the lid closed (macOS)
 
@@ -126,5 +146,6 @@ prompts for your password. On an MDM-managed Mac, power settings may be locked b
 ## Reverting
 
 Edit the shell profile (`~/.zshrc` on macOS zsh) and delete the `# >>> claude-code defaults >>>`
-block (and the `# >>> agent-yes >>>` block if you want the plain CLI back), then run
-`exec $SHELL`. To remove agent-yes entirely: `npm uninstall -g agent-yes`.
+block (and the `# >>> agent-yes >>>` and `# >>> bun runtime >>>` blocks if you want the plain CLI
+back), then run `exec $SHELL`. To remove agent-yes entirely: `npm uninstall -g agent-yes` (or
+`bun remove -g agent-yes`). To remove Bun: `rm -rf ~/.bun`.

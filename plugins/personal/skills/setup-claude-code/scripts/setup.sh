@@ -17,6 +17,13 @@ PROFILE="${CC_SETUP_PROFILE:-$(detect_profile)}"
 touch "$PROFILE"
 cp "$PROFILE" "$PROFILE.cc.bak" 2>/dev/null || true   # rolling backup of the pre-run profile
 
+# --- scratch space ----------------------------------------------------------
+# Any archives this script downloads (e.g. the Bun runtime) go under here and
+# are deleted on exit — the setup leaves no temp files behind.
+CC_TMP="$(mktemp -d "${TMPDIR:-/tmp}/setup-claude-code.XXXXXX")"
+cleanup() { rm -rf "$CC_TMP"; }
+trap cleanup EXIT
+
 # --- idempotent marker-block upsert ----------------------------------------
 # upsert_block <marker-name> <content>. Matches any existing block by the
 # ">>> <name>" / "<<< <name>" substrings (tolerates old blocks with extra text
@@ -40,6 +47,37 @@ upsert_block() {
   echo "  wrote block: ${name}"
 }
 
+# --- install the Bun runtime user-local (no sudo) ---------------------------
+# agent-yes ships its bins with a `#!/usr/bin/env bun` shebang, so `ay` fails
+# with "env: bun: No such file or directory" if Bun isn't present — even when
+# `engines` claims node>=22. Download the matching release into $CC_TMP (removed
+# on exit) and drop the binary at ~/.bun/bin/bun. Returns non-zero on failure.
+ensure_bun() {
+  command -v bun >/dev/null 2>&1 && return 0
+  [ -x "$HOME/.bun/bin/bun" ] && return 0
+  local os arch asset
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux)  os=linux  ;;
+    *) echo "  bun: unsupported OS $(uname -s) — install manually (https://bun.sh)" >&2; return 1 ;;
+  esac
+  case "$(uname -m)" in
+    arm64|aarch64) arch=aarch64 ;;
+    x86_64|amd64)  arch=x64 ;;
+    *) echo "  bun: unsupported arch $(uname -m) — install manually (https://bun.sh)" >&2; return 1 ;;
+  esac
+  command -v unzip >/dev/null 2>&1 || { echo "  bun: 'unzip' not found — cannot install Bun" >&2; return 1; }
+  asset="bun-${os}-${arch}.zip"
+  echo "  bun: downloading ${asset} ..."
+  curl -fsSL -o "$CC_TMP/$asset" "https://github.com/oven-sh/bun/releases/latest/download/$asset" || return 1
+  mkdir -p "$CC_TMP/bun-extract"
+  unzip -oq "$CC_TMP/$asset" -d "$CC_TMP/bun-extract" || return 1
+  local binp; binp="$(find "$CC_TMP/bun-extract" -type f -name bun | head -1)"
+  [ -n "$binp" ] || { echo "  bun: archive had no 'bun' binary" >&2; return 1; }
+  mkdir -p "$HOME/.bun/bin"
+  cp "$binp" "$HOME/.bun/bin/bun" && chmod +x "$HOME/.bun/bin/bun"
+}
+
 echo "Profile: $PROFILE"
 
 # --- 1. model + effort defaults --------------------------------------------
@@ -48,7 +86,26 @@ upsert_block "claude-code defaults" '# Opus + xhigh (persistent equivalent of ul
 export ANTHROPIC_MODEL="opus"
 export CLAUDE_CODE_EFFORT_LEVEL="xhigh"'
 
-# --- 2. agent-yes install ---------------------------------------------------
+# --- 2. Bun runtime + agent-yes ---------------------------------------------
+# Order matters: agent-yes's `ay` is a Bun script, so Bun must be present for the
+# wrapper to work at all. Install Bun first, then agent-yes — via npm if it's
+# there, else via Bun (a machine may only have Codex's bundled `node`, which has
+# no npm). Without this, `claude` dies at "env: bun: No such file or directory".
+if command -v bun >/dev/null 2>&1 || [ -x "$HOME/.bun/bin/bun" ]; then
+  echo "  bun: already present ($(command -v bun 2>/dev/null || echo "$HOME/.bun/bin/bun"))"
+else
+  echo "  bun: installing (agent-yes runs on Bun) ..."
+  if ensure_bun; then echo "  bun: installed ($HOME/.bun/bin/bun)"; else
+    echo "  bun: install failed — 'ay' will not run until Bun is on PATH (https://bun.sh)" >&2
+  fi
+fi
+BUN="$(command -v bun 2>/dev/null || echo "$HOME/.bun/bin/bun")"
+
+# Put ~/.bun/bin on PATH so the `#!/usr/bin/env bun` shebang in `ay` resolves.
+upsert_block "bun runtime" '# Bun runtime — agent-yes (`ay`) is a Bun script (#!/usr/bin/env bun) and fails without it.
+# Revert: delete this block, then `exec $SHELL` (and `rm -rf ~/.bun` to remove Bun).
+export PATH="$HOME/.bun/bin:$PATH"'
+
 if command -v ay >/dev/null 2>&1; then
   echo "  agent-yes: already installed ($(command -v ay))"
 elif command -v npm >/dev/null 2>&1; then
@@ -58,8 +115,15 @@ elif command -v npm >/dev/null 2>&1; then
   else
     echo "  agent-yes: npm install failed (needs a writable npm prefix or sudo); skipping" >&2
   fi
+elif [ -x "$BUN" ]; then
+  echo "  agent-yes: npm not found — installing via 'bun install -g agent-yes' ..."
+  if "$BUN" install -g agent-yes >/dev/null 2>&1; then
+    echo "  agent-yes: installed (via bun → ~/.bun/bin)"
+  else
+    echo "  agent-yes: bun install failed; skipping" >&2
+  fi
 else
-  echo "  agent-yes: npm not found — install Node.js/npm, then re-run to get the wrapper" >&2
+  echo "  agent-yes: neither npm nor bun available — install Node.js or Bun, then re-run" >&2
 fi
 
 # --- 3. agent-yes wrapper function (caffeinate-wrapped so runs never idle-sleep) -----------
