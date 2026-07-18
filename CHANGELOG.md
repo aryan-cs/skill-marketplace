@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-07-17
+
+### Added
+- `check-paper` reference: a "Preprints and the NeurIPS style modes" section — documents that the NeurIPS style file defaults to *submission* mode (line numbers, "Anonymous Author(s)", and the "Submitted to … Do not distribute." footer), that `\usepackage[preprint]{neurips_2025}` strips all three for arXiv, and points to the community `arxiv-style` (kourgeorge/arxiv-style) and bioRxiv fork for a standalone NeurIPS-looking preprint.
+
 ## [0.5.0] - 2026-07-17
 
 ### Added

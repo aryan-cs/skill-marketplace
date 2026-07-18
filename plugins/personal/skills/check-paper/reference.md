@@ -34,6 +34,25 @@ for submission (anonymous) and add author info only at camera-ready.
 
 When unsure or posting to arXiv, the **NeurIPS** or **ICLR** style is the safe, familiar default for general ML.
 
+### Preprints (arXiv) and the NeurIPS style modes
+
+The NeurIPS style file has three modes; the **default is submission mode**, which is why a fresh
+template shows line numbers, "Anonymous Author(s)", and a "Submitted to … NeurIPS … Do not
+distribute." footer. For a preprint you do **not** want those:
+
+- `\usepackage{neurips_2025}` — **submission**: line numbers, anonymized, "Submitted to…" footer.
+- `\usepackage[preprint]{neurips_2025}` — **preprint (arXiv)**: no line numbers, real author names,
+  footer reads "Preprint. Work in progress." Use this to keep the NeurIPS look before/while under review.
+- `\usepackage[final]{neurips_2025}` — **camera-ready**: accepted papers only.
+
+For a standalone preprint that keeps the single-column NeurIPS aesthetic but is deliberately *not*
+mistakable for a NeurIPS publication, use the community **arxiv-style** template (based on the NIPS
+style): https://github.com/kourgeorge/arxiv-style (`arxiv.sty` + `template.tex`; `\usepackage{arxiv}`).
+A bioRxiv-flavored fork: https://github.com/ylaboratory/ar-biorxiv-style. Rule of thumb: use
+`[preprint]` NeurIPS if the paper is headed to NeurIPS; use `arxiv-style` if it's standalone or headed
+elsewhere — don't dress a non-NeurIPS paper as a NeurIPS one. (A1 flags a preprint left in submission
+mode: line numbers or "Anonymous Author(s)" on something you're posting publicly under your name.)
+
 ## The abstract shape (arxiv.org/abs/1706.03762)
 
 Four moves, ~4–6 sentences, ≤~200 words, no citations, results-forward:
