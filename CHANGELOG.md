@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-17
+
+### Added
+- `check-paper` skill — a model/tool-agnostic paper-review checklist grouped as: structure & venue compliance (correct *unmodified* template, anonymization for double-blind review, required sections, resolved cross-references), writing (narrative prose, results-first abstract in the "Attention Is All You Need" shape, explicit contributions, claims-match-evidence, consistent notation/terminology), citations (completeness + a semantic hand-check, plus `scripts/check-citations.sh` for undefined/unused/duplicate LaTeX+BibTeX keys), rigor & reproducibility (baselines/ablations/error bars/seeds/compute, math & notation, limitations/ethics), and visuals (Turbo colormap, semantic color, matched fonts, ~20px table whitespace, paragraph alignment, no label overlap, legibility). `reference.md` includes a compare/contrast table of premier ML venue templates (NeurIPS, ICML, ICLR, CVPR/ICCV, ACL, AAAI, JMLR/TMLR, IEEE, Typst) with current links, the abstract template, and the visual recipes.
+
 ## [0.4.0] - 2026-07-17
 
 ### Changed
