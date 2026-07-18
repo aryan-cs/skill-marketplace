@@ -2,6 +2,12 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-07-17
+
+### Added
+- `check-paper` bundles a ready-to-use, prefilled **arXiv/NeurIPS-style preprint template** in `template/` (MIT-licensed arxiv-style — `template.tex`, `arxiv.sty`, `orcid.pdf`, `references.bib`, license). Prefilled single author Aryan Gupta with ORCID `0009-0005-1413-3773` linked via the green iD and email `aryan.cs.app@gmail.com`; "A Preprint" header, no line numbers, no anonymity, `hidelinks` for a clean look. Verified to compile with `tectonic`. Wired into check A1 and a "Starting a new paper" section.
+- Writing checks **B8** (no em dashes) and **B9** (reads human, not AI — no inflated diction, mechanical structure, hedged filler, or spurious "nuanced" context-window details a real author wouldn't include), plus `scripts/check-ai-tells.sh` to locate em dashes and high-signal AI-tell words/phrases, and a "senior-researcher voice" section in `reference.md`.
+
 ## [0.5.1] - 2026-07-17
 
 ### Added

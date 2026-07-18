@@ -1,0 +1,8 @@
+# LaTeX build artifacts (orcid.pdf is a source asset — keep it)
+template.pdf
+*.aux
+*.log
+*.bbl
+*.blg
+*.out
+*.synctex.gz

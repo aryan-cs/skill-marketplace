@@ -76,6 +76,29 @@ Anti-patterns to flag: a background paragraph before the contribution; a list of
 
 The facts are identical; the second states what each fact *means* and connects them into an argument.
 
+## AI-writing tells and the senior-researcher voice (B8, B9)
+
+The paper should read as if a senior researcher at a frontier lab wrote it: confident, economical,
+precise, assuming an expert reader. Hunt and remove these tells:
+
+- **Em dashes** — none (B8). Replace `—` / `---` with a comma, colon, parentheses, or a period.
+- **Inflated diction** — delve, leverage (as a verb), underscore, showcase, pivotal, seamless,
+  groundbreaking, "rich tapestry", "a testament to", "plays a crucial role", "harness the power",
+  "cutting-edge", "paradigm shift".
+- **Mechanical structure** — rule-of-three everywhere; every paragraph as topic sentence + three
+  examples + restated summary; heavy signposting ("In this section, we...").
+- **Hedged filler / connective overuse** — "it is worth noting", "in essence", and "moreover /
+  furthermore / notably / importantly" sprinkled as glue.
+- **Spurious "nuanced" details — the strongest tell.** AI drafts leak tangential facts, over-explained
+  basics, and hedged caveats that were salient to the model but that a real author would never
+  include, because they don't serve the argument. Every sentence must be load-bearing; if a detail
+  doesn't advance the claim, cut it.
+- **Marketing tone** — "powerful", "robust", "seamless", superlatives with no evidence.
+
+What senior-researcher prose does instead: leads with the claim, backs it with a number or a
+mechanism, assumes the reader knows the basics, states limitations plainly, and stops. Run
+`scripts/check-ai-tells.sh` for the mechanical tells; the voice judgment is manual.
+
 ## Turbo palette + semantic color (E1, E3)
 
 ```python
