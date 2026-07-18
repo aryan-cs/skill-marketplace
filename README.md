@@ -29,6 +29,14 @@ skill-marketplace/
 
 The `quality-review` skill is a **working example** — keep it, edit it, or delete the folder.
 
+## Skills
+
+Installed skills appear in the `/` menu as `/personal:<name>`, and auto-trigger when a request matches their description.
+
+- **[`quality-review`](plugins/personal/skills/quality-review/)** — reviews a code diff or pull request for correctness bugs, security issues, performance problems, and readability, reporting findings by severity with concrete fixes.
+- **[`setup-claude-code`](plugins/personal/skills/setup-claude-code/)** — bootstraps a machine's Claude Code setup: forces Opus + full ultracode as the default (via shell env vars and a wrapper), installs [agent-yes](https://www.npmjs.com/package/agent-yes) with the auto-approve `claude` wrapper, and adds macOS keep-awake helpers so agents survive a closed laptop lid. Ships tested `check-policy`/`setup`/`verify` scripts.
+- **[`check-paper`](plugins/personal/skills/check-paper/)** — reviews an academic (ML/CS) paper and its figures against a full submission checklist: narrative prose, a results-first abstract, hand-checked citations, structure & venue-template compliance, anonymization, reproducibility & rigor, no em dashes / no AI-sounding writing, and figure/table standards (Turbo colormap, semantic color, spacing, legible labels). Bundles a ready-to-use arXiv/NeurIPS-style preprint template plus citation and AI-tell checker scripts.
+
 ## Install it (once, on any machine)
 
 Inside a Claude Code session:
@@ -91,4 +99,4 @@ claude --plugin-dir ./plugins/personal
 - Skills are **auto-discovered** from `skills/<name>/SKILL.md` — you never list them in `plugin.json`.
 - The command name comes from the **folder** name (`quality-review/` → `/personal:quality-review`), not the frontmatter `name`. Keep them equal to avoid confusion.
 - Keep each `SKILL.md` focused (aim under ~500 lines); push detail into sibling files like `reference.md` and link to them one level deep.
-- A skill `name` must be kebab-case and must **not** contain `claude` or `anthropic` (reserved).
+- A skill `name` must be kebab-case, ≤ 64 chars. (Claude Code does **not** reserve `claude`/`anthropic` in skill names — a tool-specific name like `setup-claude-code` is fine.)
