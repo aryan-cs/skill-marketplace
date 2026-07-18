@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-07-17
+
+### Changed
+- `check-paper` bundled preprint template: stripped the template-y decorations for a clean, published-looking title block in the spirit of "Attention Is All You Need" — removed the "A Preprint" label (both under the title and in the running header), the auto `\today` date, and the green ORCID logo icon (the author name still hyperlinks to ORCID). Dropped the now-unused `orcid.pdf` asset. (Keywords line and the University of Illinois Urbana-Champaign affiliation were set in 0.6.0.)
+
 ## [0.6.0] - 2026-07-17
 
 ### Added

@@ -17,7 +17,7 @@ Tool- and format-agnostic: works for LaTeX, Typst, Markdown, or Word, and for an
 
 ## Starting a new paper (preprint)
 
-This skill bundles a ready-to-use **arXiv / NeurIPS-style preprint** template in `template/` (the MIT-licensed [arxiv-style](https://github.com/kourgeorge/arxiv-style), prefilled and verified to compile). To start a paper: copy `template/` into the new paper's directory and edit `template.tex`. It ships `template.tex` (single author, ORCID-linked, "A Preprint" header — **no line numbers or anonymity**), `arxiv.sty`, `orcid.pdf` (the iD logo), `references.bib`, and the license. Build with `tectonic template.tex` (or `pdflatex` + `bibtex`). The author is prefilled as **Aryan Gupta**, ORCID `0009-0005-1413-3773` linked via the green iD, email `aryan.cs.app@gmail.com`; replace the title, affiliation, keywords, and the `\lipsum` filler with real content.
+This skill bundles a ready-to-use **arXiv / NeurIPS-style preprint** template in `template/` (the MIT-licensed [arxiv-style](https://github.com/kourgeorge/arxiv-style), prefilled and verified to compile). To start a paper: copy `template/` into the new paper's directory and edit `template.tex`. It ships `template.tex` (single author whose name hyperlinks to your ORCID — no logo icon; clean title with **no "A Preprint" label, no date, no line numbers, no anonymity, no keywords line**), `arxiv.sty`, `references.bib`, and the license. Build with `tectonic template.tex` (or `pdflatex` + `bibtex`). The author is prefilled as **Aryan Gupta** at the University of Illinois Urbana-Champaign, name linked to ORCID `0009-0005-1413-3773`, email `aryan.cs.app@gmail.com`; replace the title and the `\lipsum` filler with real content.
 
 ## A — Structure & venue compliance
 

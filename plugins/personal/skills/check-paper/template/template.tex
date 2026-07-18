@@ -18,24 +18,25 @@
 
 \title{Your Paper Title}
 
-% \date{}   % uncomment to hide the date, or set a fixed one, e.g. \date{September 9, 1985}
+\date{}   % no date — arXiv stamps the submission date in the margin. For a fixed date, e.g. \date{\today} or \date{September 9, 1985}.
 
-% Single author, ORCID-linked: the green iD in the PDF links to orcid.org/0009-0005-1413-3773.
+% Single author; the name hyperlinks to your ORCID page (no logo icon shown).
 % To add a co-author, uncomment the \And block.
 \author{
-  \href{https://orcid.org/0009-0005-1413-3773}{\includegraphics[scale=0.06]{orcid.pdf}\hspace{1mm}Aryan Gupta} \\
+  \href{https://orcid.org/0009-0005-1413-3773}{Aryan Gupta} \\
   University of Illinois Urbana-Champaign \\
   \texttt{aryan.cs.app@gmail.com} \\
   %% \And
-  %% \href{https://orcid.org/0000-0000-0000-0000}{\includegraphics[scale=0.06]{orcid.pdf}\hspace{1mm}Co Author} \\
+  %% \href{https://orcid.org/0000-0000-0000-0000}{Co Author} \\
   %% Their Affiliation \\
   %% \texttt{coauthor@example.com} \\
 }
 
-% The header already reads "A Preprint" — this IS the arXiv preprint style.
-% Uncomment to override it:
-%\renewcommand{\headeright}{Technical Report}
-%\renewcommand{\undertitle}{Technical Report}
+% Remove the "A Preprint" label from under the title and from the page header — most
+% professional preprints omit it, and arXiv's own margin stamp already marks the paper as a
+% preprint. To restore it, delete these two lines; to relabel (e.g. a journal), set the text.
+\renewcommand{\headeright}{}
+\renewcommand{\undertitle}{}
 \renewcommand{\shorttitle}{Your Short Title}
 
 %%% PDF metadata (check with: pdfinfo template.pdf)
