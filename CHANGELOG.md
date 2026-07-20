@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-07-20
+
+### Added
+- `setup-claude-code` now provides an order-aware macOS smart-lid mode. `lidawake smart-on` installs a reversible root LaunchDaemon that observes `IOConsoleLocked` and `AppleClamshellState`: closing the lid first keeps agents running even if macOS subsequently locks the display, while explicitly locking with Touch ID/power before closing restores normal sleep and requests it immediately. It fails safe on missing or ambiguous sensor state, exposes `lidawake status` and `smart-off`, and includes deterministic state-machine, restart, and isolated installer tests. The legacy unconditional `lidawake on|off` toggle remains available.
+
 ## [0.6.1] - 2026-07-17
 
 ### Changed
