@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] - 2026-07-21
+
+### Changed
+- `check-paper` writing check B3 now requires paper titles to be short, catchy, and to the point while remaining specific, accurate, and non-overclaiming. It flags filler, stacked qualifiers, unnecessary subtitles, and scope details that belong in the abstract.
+
 ## [0.6.1] - 2026-07-17
 
 ### Changed
