@@ -31,7 +31,17 @@ else
   echo "  FAIL: 'ay' not found (agent-yes not installed / npm bin not on PATH)"; fail=1
 fi
 
-echo "== 3. model actually resolves to Opus (one small API call) =="
+echo "== 3. smart-lid helpers are staged =="
+smart_home="${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}"
+if [ -x "$smart_home/smart-lid-daemon.sh" ] && [ -x "$smart_home/install-smart-lid.sh" ] \
+  && run 'type lidawake' | grep -q 'function'; then
+  echo "  $smart_home"
+  echo "  PASS"
+else
+  echo "  FAIL: smart-lid scripts or lidawake shell function are missing"; fail=1
+fi
+
+echo "== 4. model actually resolves to Opus (one small API call) =="
 TMP="$(mktemp)"
 run "command claude -p 'reply with exactly: ok' --output-format json" > "$TMP"
 # Interactive-shell startup can print banners (e.g. "Restored session:") ahead of the

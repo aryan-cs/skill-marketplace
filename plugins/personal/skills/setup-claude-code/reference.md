@@ -89,10 +89,13 @@ claude() {
 awake() { caffeinate -dimsu "$@"; }
 codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
 lidawake() {
-  case "${1:-on}" in
-    on)  sudo pmset -a disablesleep 1 && echo "Lid-closed sleep DISABLED. Revert: lidawake off" ;;
-    off) sudo pmset -a disablesleep 0 && echo "Lid behavior restored to normal." ;;
-    *)   echo "usage: lidawake on|off" ;;
+  case "${1:-status}" in
+    on)  sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled. Revert: lidawake off" ;;
+    off) sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall ;;
+    smart-on)  sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" install ;;
+    smart-off) sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall ;;
+    status)    "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" status ;;
+    *)   echo "usage: lidawake on|off|smart-on|smart-off|status" ;;
   esac
 }
 # <<< keep-awake <<<
@@ -125,7 +128,7 @@ with `bun install -g agent-yes` into `~/.bun/bin`.
 Uninstall agent-yes with `npm uninstall -g agent-yes` (or `bun remove -g agent-yes`); remove Bun
 with `rm -rf ~/.bun` and delete the `bun runtime` block.
 
-## Keeping agents running with the lid closed (macOS)
+## Order-aware lid behavior (macOS)
 
 Two different sleep paths matter, and they need different tools:
 
@@ -133,18 +136,46 @@ Two different sleep paths matter, and they need different tools:
   `codex()` wrappers already run under `caffeinate -dimsu`, so a running agent won't idle-sleep.
   Use `awake <cmd>` to give any other command the same protection.
 - **Lid-closed (clamshell) sleep**: `caffeinate` does **not** prevent this on a MacBook with no
-  external display — closing the lid forces sleep regardless of assertions. The only reliable knob
-  is `sudo pmset disablesleep 1`, exposed here as `lidawake on` (revert: `lidawake off`).
+  external display — closing the lid forces sleep regardless of assertions. Preventing it requires
+  `pmset disablesleep 1`, which is privileged.
 
-So to run an agent overnight with the lid shut: `lidawake on`, start the task, close the lid.
-Run `lidawake off` when done. `disablesleep 1` disables sleep **globally** (not just while an
-agent runs) until you turn it off, so prefer AC power — a lidded Mac that never sleeps can run hot
-in a bag and drain the battery.
+The recommended `lidawake smart-on` installs a root LaunchDaemon that watches two macOS I/O Registry
+signals every 100 ms: `IOConsoleLocked` and `AppleClamshellState`. It tracks **which transition happened
+first**, because closing the lid can itself make `IOConsoleLocked` change to `Yes`:
 
-Why the skill doesn't do this for you: `pmset` needs `sudo`, and the org's remote policy
-**denies `Bash(sudo:*)`** inside Claude Code sessions — plus a global power change shouldn't run
-unprompted. `lidawake` is defined in your shell so *you* run it in a normal terminal, where it
-prompts for your password. On an MDM-managed Mac, power settings may be locked by the org.
+| Event order | Result | Why |
+|---|---|---|
+| Lid closes while unlocked | Keep awake (`disablesleep 1`) | This was an intentional close-first agent session; a later automatic lock is ignored until the lid opens. |
+| Touch ID/power locks while lid is open, then lid closes | Restore sleep and request it immediately (`disablesleep 0`, `pmset sleepnow`) | The explicit lock-first transition arms normal clamshell sleep. |
+| Lid reopens while still locked | Restore normal sleep (`disablesleep 0`) | The close-first session has ended. |
+| Sensors are unavailable or startup is ambiguously closed+locked | Restore normal sleep (`disablesleep 0`) | Failure is conservative: it never leaves an unknown lidded machine forced awake. |
+
+If lid and lock change inside the same polling interval, the daemon treats it as close-first. This is
+necessary because lid closure commonly causes the lock signal; a deliberate power-button lock is normally
+observable while the lid remains open before the user closes it. For a guaranteed lock-first action, wait
+until the lock screen appears before closing the lid; physically simultaneous actions cannot be ordered from
+the two macOS state signals.
+
+Smart mode pre-arms `disablesleep 1` whenever the lid is open and the console is unlocked, because enabling it
+only after lid closure may be too late. Consequently, ordinary system sleep is suppressed in that state too.
+The daemon restores `disablesleep 0` as soon as it observes an explicit lock while open. A bare `lidawake`
+does not change power state; it is equivalent to `lidawake status`.
+
+The installed files are `/usr/local/libexec/com.aryangupta.smart-lid` and
+`/Library/LaunchDaemons/com.aryangupta.smart-lid.plist`. Inspect with `lidawake status`; remove both and
+restore `disablesleep 0` with `lidawake smart-off`. The state file under `/var/run` preserves an active
+close-first session across an unexpected daemon restart but is cleared at boot.
+
+For the older unconditional behavior, `lidawake on` first removes smart mode and then sets `disablesleep 1`
+globally; `lidawake off` removes smart mode if present and restores `disablesleep 0`. The modes therefore
+cannot fight over the power setting.
+
+Why installation needs a normal terminal: `pmset` and a system LaunchDaemon require `sudo`; some
+managed environments deny sudo inside Claude Code sessions. On an MDM-managed Mac, power settings may
+also be locked by the organization.
+
+Safety: close-first deliberately leaves a lidded Mac running. Prefer AC power and never put it in a bag
+in that state; it can run hot and drain the battery. Lock first, then close, whenever you want sleep.
 
 ## Caveats
 
@@ -160,4 +191,6 @@ prompts for your password. On an MDM-managed Mac, power settings may be locked b
 Edit the shell profile (`~/.zshrc` on macOS zsh) and delete the `# >>> claude-code defaults >>>`
 block (and the `# >>> agent-yes >>>` and `# >>> bun runtime >>>` blocks if you want the plain CLI
 back), then run `exec $SHELL`. To remove agent-yes entirely: `npm uninstall -g agent-yes` (or
-`bun remove -g agent-yes`). To remove Bun: `rm -rf ~/.bun`.
+`bun remove -g agent-yes`). To remove Bun: `rm -rf ~/.bun`. If smart-lid mode was installed, run
+`lidawake smart-off` first; this unloads the LaunchDaemon, removes its two installed files, and restores
+normal sleep.

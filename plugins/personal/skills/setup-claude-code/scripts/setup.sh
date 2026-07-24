@@ -5,6 +5,9 @@
 # Override the target profile for testing with: CC_SETUP_PROFILE=/tmp/rc ./setup.sh
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SMART_LID_HOME="${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}"
+
 # --- pick the shell profile -------------------------------------------------
 detect_profile() {
   case "$(basename "${SHELL:-/bin/zsh}")" in
@@ -43,7 +46,8 @@ upsert_block() {
       { if (seen && blank) print ""; print; seen = 1; blank = 0 }
     ' "$PROFILE" > "$PROFILE.cctmp" && mv "$PROFILE.cctmp" "$PROFILE"
   fi
-  { printf '\n%s\n' "$bf"; printf '%s\n' "$content"; printf '%s\n' "$ef"; } >> "$PROFILE"
+  if [ -s "$PROFILE" ]; then printf '\n' >> "$PROFILE"; fi
+  { printf '%s\n' "$bf"; printf '%s\n' "$content"; printf '%s\n' "$ef"; } >> "$PROFILE"
   echo "  wrote block: ${name}"
 }
 
@@ -131,7 +135,7 @@ fi
 # --- 3. agent-yes wrapper function (caffeinate-wrapped so runs never idle-sleep) -----------
 # NOTE on the caffeinate branches: caffeinate execs its target via PATH, so `caffeinate ... claude`
 # runs the real binary, NOT this function (no recursion). The no-caffeinate fallbacks use
-# `command` to bypass the function. Lid-closed survival still needs `lidawake on` (see block 4).
+# `command` to bypass the function. Order-aware lid behavior uses `lidawake smart-on` (see block 4).
 upsert_block "agent-yes" '# Route `claude` through agent-yes (auto-approves prompts), default to full ultracode
 # (`--effort ultracode` = xhigh effort + standing workflow orchestration), and hold a caffeinate assertion
 # so a run never idle-sleeps. Pass your own --effort to override (last wins); bypass all of it with `command claude`.
@@ -151,19 +155,31 @@ claude() {
   fi
 }'
 
-# --- 4. keep-awake helpers (idle sleep + lid-closed operation) ------------------------------
+# --- 4. smart-lid payload + keep-awake helpers ----------------------------------------------
+# Copy the privileged helper payload out of the plugin cache so it remains available after a
+# marketplace refresh. Installing/removing the LaunchDaemon still requires one explicit sudo.
+mkdir -p "$SMART_LID_HOME"
+install -m 0755 "$SCRIPT_DIR/smart-lid-daemon.sh" "$SMART_LID_HOME/smart-lid-daemon.sh"
+install -m 0755 "$SCRIPT_DIR/install-smart-lid.sh" "$SMART_LID_HOME/install-smart-lid.sh"
+echo "  smart lid: staged helper payload at $SMART_LID_HOME"
+
 upsert_block "keep-awake" '# Keep long agent runs alive on macOS. caffeinate stops idle/display/system sleep;
-# surviving a CLOSED lid additionally needs `lidawake on` (sudo pmset disablesleep). Revert: lidawake off.
+# `lidawake smart-on` adds order-aware behavior: close-first stays awake; lock-first then close sleeps.
 awake() { caffeinate -dimsu "$@"; }                          # run any command with no idle sleep
 codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
-lidawake() {                                                 # toggle lid-closed operation (asks for sudo)
-  case "${1:-on}" in
-    on)  sudo pmset -a disablesleep 1 && echo "Lid-closed sleep DISABLED — the Mac stays awake with the lid shut (use on AC power). Revert: lidawake off" ;;
-    off) sudo pmset -a disablesleep 0 && echo "Lid behavior restored to normal." ;;
-    *)   echo "usage: lidawake on|off" ;;
+lidawake() {
+  local sl="'"$SMART_LID_HOME"'/install-smart-lid.sh"
+  case "${1:-status}" in
+    on)  sudo "$sl" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled — the Mac stays awake with the lid shut. Revert: lidawake off" ;;
+    off) sudo "$sl" uninstall ;;
+    smart-on)  sudo "$sl" install ;;
+    smart-off) sudo "$sl" uninstall ;;
+    status)    "$sl" status ;;
+    *)   echo "usage: lidawake on|off|smart-on|smart-off|status" ;;
   esac
 }'
 
 echo
 echo "Done. Open a NEW terminal (or run: exec \$SHELL) for the changes to take effect."
-echo "To keep agents running with the LID CLOSED, run once (asks for your password): lidawake on"
+echo "Recommended smart behavior (asks once for your password): lidawake smart-on"
+echo "  close lid first -> stays awake; lock first, then close -> sleeps"
