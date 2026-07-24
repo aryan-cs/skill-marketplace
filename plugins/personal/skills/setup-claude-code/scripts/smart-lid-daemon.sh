@@ -200,6 +200,13 @@ print_state() {
 
 simulate() {
   local locked closed
+  # 'simulate' is a test/debug path. Refuse to issue REAL power changes as root: that is what the
+  # 'run' daemon (with its cleanup trap) is for, and without a trap here a `sudo ... simulate` could
+  # leave disablesleep stuck at 1. Applying against a mocked pmset as a normal user stays allowed.
+  if [ "${SMART_LID_SIMULATION_APPLY:-0}" = 1 ] && [ "$(id -u)" -eq 0 ]; then
+    echo "refusing to run 'simulate' with SMART_LID_SIMULATION_APPLY=1 as root; use 'run' instead." >&2
+    exit 77
+  fi
   STATE_FILE="${SMART_LID_STATE_FILE:-/tmp/com.aryangupta.smart-lid.simulation.$$}"
   if [ "${SMART_LID_SIMULATION_KEEP_STATE:-0}" != 1 ]; then
     rm -f "$STATE_FILE"

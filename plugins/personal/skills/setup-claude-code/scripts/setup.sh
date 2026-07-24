@@ -168,12 +168,13 @@ upsert_block "keep-awake" '# Keep long agent runs alive on macOS. caffeinate sto
 awake() { caffeinate -dimsu "$@"; }                          # run any command with no idle sleep
 codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
 lidawake() {
+  local sl="'"$SMART_LID_HOME"'/install-smart-lid.sh"
   case "${1:-status}" in
-    on)  sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled — the Mac stays awake with the lid shut. Revert: lidawake off" ;;
-    off) sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall ;;
-    smart-on)  sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" install ;;
-    smart-off) sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall ;;
-    status)    "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" status ;;
+    on)  sudo "$sl" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled — the Mac stays awake with the lid shut. Revert: lidawake off" ;;
+    off) sudo "$sl" uninstall ;;
+    smart-on)  sudo "$sl" install ;;
+    smart-off) sudo "$sl" uninstall ;;
+    status)    "$sl" status ;;
     *)   echo "usage: lidawake on|off|smart-on|smart-off|status" ;;
   esac
 }'

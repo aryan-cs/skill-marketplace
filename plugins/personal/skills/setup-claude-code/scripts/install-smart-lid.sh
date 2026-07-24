@@ -16,6 +16,7 @@ INSTALL="${SMART_LID_INSTALL:-/usr/bin/install}"
 PLUTIL="${SMART_LID_PLUTIL:-/usr/bin/plutil}"
 SLEEP_BIN="${SMART_LID_SLEEP:-/bin/sleep}"
 VERIFY_DELAY="${SMART_LID_INSTALL_VERIFY_DELAY:-1}"
+VERIFY_ATTEMPTS="${SMART_LID_INSTALL_VERIFY_ATTEMPTS:-6}"
 
 require_root() {
   if [ -z "$TEST_ROOT" ] && [ "$(id -u)" -ne 0 ]; then
@@ -112,8 +113,18 @@ install_daemon() {
 
     "$LAUNCHCTL" bootstrap system "$PLIST_DEST"
     "$LAUNCHCTL" kickstart -k "system/$LABEL"
-    "$SLEEP_BIN" "$VERIFY_DELAY"
-    service_running
+    # Poll for the running state instead of checking once: kickstart -k respawns the daemon and
+    # launchd throttles that respawn by ThrottleInterval, so a single check after VERIFY_DELAY could
+    # still see it "waiting" and roll back a perfectly healthy install.
+    local verify_attempt=0
+    until service_running; do
+      verify_attempt=$((verify_attempt + 1))
+      if [ "$verify_attempt" -ge "$VERIFY_ATTEMPTS" ]; then
+        echo "smart-lid daemon did not reach a running state in time." >&2
+        return 1
+      fi
+      "$SLEEP_BIN" "$VERIFY_DELAY"
+    done
     committed=1
     transaction_active=0
     trap - EXIT HUP INT TERM

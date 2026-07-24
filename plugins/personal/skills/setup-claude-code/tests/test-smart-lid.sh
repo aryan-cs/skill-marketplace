@@ -192,6 +192,10 @@ cmp -s "$TMP/plist-before-rollback" "$lifecycle_root/Library/LaunchDaemons/com.a
 test -e "$TMP/launchctl-state" || fail "previous service was not restarted after rollback"
 test "$(grep -c '^bootstrap system ' "$TMP/launchctl-log")" -eq 2 \
   || fail "rollback did not perform candidate and previous-service bootstrap attempts"
+# The rollback itself must restore disablesleep=0 (this is asserted BEFORE the uninstall below,
+# which would independently reset it and mask a regression of the rollback fail-safe).
+test "$(cat "$TMP/pmset-state-lifecycle")" = 0 \
+  || fail "rollback did not restore disablesleep=0 after a failed update"
 env "${lifecycle_env[@]}" "$INSTALLER" uninstall >/dev/null
 test "$(cat "$TMP/pmset-state-lifecycle")" = 0 || fail "uninstall did not restore disablesleep=0"
 
