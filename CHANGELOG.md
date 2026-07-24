@@ -2,10 +2,15 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
-## [0.7.0] - 2026-07-20
+## [0.7.0] - 2026-07-23
 
 ### Added
-- `setup-claude-code` now provides an order-aware macOS smart-lid mode. `lidawake smart-on` installs a reversible root LaunchDaemon that observes `IOConsoleLocked` and `AppleClamshellState`: closing the lid first keeps agents running even if macOS subsequently locks the display, while explicitly locking with Touch ID/power before closing restores normal sleep and requests it immediately. It fails safe on missing or ambiguous sensor state, exposes `lidawake status` and `smart-off`, and includes deterministic state-machine, restart, and isolated installer tests. The legacy unconditional `lidawake on|off` toggle remains available.
+- `setup-claude-code` now provides an order-aware macOS smart-lid mode. `lidawake smart-on` installs a reversible root LaunchDaemon that observes `IOConsoleLocked` and `AppleClamshellState`: closing the lid first keeps agents running even if macOS subsequently locks the display, while explicitly locking with Touch ID/power before closing restores normal sleep and requests it immediately. It fails safe on missing or ambiguous sensor state, exposes `lidawake status` and `smart-off`, and includes deterministic state-machine, restart, and isolated installer tests. The legacy unconditional `lidawake on|off` toggle remains available. Hardened before merge: install-time throttle-race poll, tested rollback fail-safe, deterministic installer path, and a root guard on `simulate`.
+
+## [0.6.2] - 2026-07-21
+
+### Changed
+- `check-paper` writing check B3 now requires paper titles to be short, catchy, and to the point while remaining specific, accurate, and non-overclaiming. It flags filler, stacked qualifiers, unnecessary subtitles, and scope details that belong in the abstract.
 
 ## [0.6.1] - 2026-07-17
 
