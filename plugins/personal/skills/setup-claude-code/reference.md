@@ -89,12 +89,13 @@ claude() {
 awake() { caffeinate -dimsu "$@"; }
 codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
 lidawake() {
+  local sl="$HOME/.local/share/setup-claude-code/install-smart-lid.sh"   # setup.sh bakes the resolved absolute path here
   case "${1:-status}" in
-    on)  sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled. Revert: lidawake off" ;;
-    off) sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall ;;
-    smart-on)  sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" install ;;
-    smart-off) sudo "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" uninstall ;;
-    status)    "${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}/install-smart-lid.sh" status ;;
+    on)  sudo "$sl" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled. Revert: lidawake off" ;;
+    off) sudo "$sl" uninstall ;;
+    smart-on)  sudo "$sl" install ;;
+    smart-off) sudo "$sl" uninstall ;;
+    status)    "$sl" status ;;
     *)   echo "usage: lidawake on|off|smart-on|smart-off|status" ;;
   esac
 }
