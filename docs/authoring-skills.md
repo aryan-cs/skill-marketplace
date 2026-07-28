@@ -24,7 +24,7 @@ description: <third person> <what it does> + <when to use it, with trigger words
 ---
 ```
 
-- **`name`** — kebab-case, ≤ 64 chars, lowercase / digits / hyphens. Must equal the folder name. Name it for what it does; a tool-specific skill may include that tool's name (e.g. `setup-claude-code`).
+- **`name`** — kebab-case, ≤ 64 chars, lowercase / digits / hyphens. Must equal the folder name. Name it for what it does; a tool-specific skill may include that tool's name (e.g. `check-paper`). Watch for scope drift — `setup-agent-mac` started as `setup-claude-code` and outgrew the name once it also covered Codex and machine-level settings.
 - **`description`** — the single most important line. Write it in the **third person** ("Reviews…", "Generates…", "Use when…"), and make it state both **what** the skill does and **when** to use it, including the words a user would actually say. This is what Claude matches on to auto-load the skill. Keep it under ~1024 chars.
 
 Useful optional keys:

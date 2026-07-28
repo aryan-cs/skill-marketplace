@@ -1,11 +1,11 @@
 ---
-name: setup-claude-code
-description: "Sets up Claude Code on a machine the way Aryan likes it — defaults the model to the latest Opus (Opus 5 today, and it rolls forward on its own) with xhigh as the env effort floor, launches every interactive session on full ultracode effort with auto mode on, installs agent-yes with the auto-approve `claude` wrapper, and adds macOS keep-awake helpers including order-aware lid behavior: close first to keep running, lock first and then close to sleep, and automatically restore sleep at 10% battery while closed. Use when the user asks to set up Claude Code, configure a new machine/laptop, make Opus or ultracode/xhigh the default, auto-upgrade to the newest Opus, turn auto mode (`--permission-mode auto`) on by default, stop the model reverting to Sonnet or medium effort on restart, install agent-yes, keep Claude Code/Codex running with the lid closed, make lid sleep depend on whether the Mac was explicitly locked first, or prevent closed-lid keep-awake mode from draining the battery completely."
+name: setup-agent-mac
+description: "Sets up a Mac for agent work the way Aryan likes it — defaults Claude Code to the latest Opus (Opus 5 today, and it rolls forward on its own) with xhigh as the env effort floor, launches every interactive session on full ultracode effort with auto mode on, installs agent-yes with the auto-approve `claude` wrapper, and adds the macOS helpers long agent runs need: keep-awake, order-aware lid behavior (close first to keep running, lock first and then close to sleep, and automatically restore sleep at 10% battery while closed), and opt-in suppression of the 'quit unexpectedly' crash dialog. Use when the user asks to set up Claude Code, configure a new machine/laptop, make Opus or ultracode/xhigh the default, auto-upgrade to the newest Opus, turn auto mode (`--permission-mode auto`) on by default, stop the model reverting to Sonnet or medium effort on restart, install agent-yes, keep Claude Code/Codex running with the lid closed, make lid sleep depend on whether the Mac was explicitly locked first, prevent closed-lid keep-awake mode from draining the battery completely, or stop repeated 'Google Chrome quit unexpectedly' crash popups caused by headless browsers that agent tooling launches."
 ---
 
-# Set up Claude Code
+# Set up an agent Mac
 
-Make **the latest Opus + full ultracode effort + auto mode** the persistent default for Claude Code on this machine, and install **agent-yes** with its `claude` auto-approve wrapper. This reproduces Aryan's standard setup and survives restarts.
+Make **the latest Opus + full ultracode effort + auto mode** the persistent default for Claude Code on this machine, install **agent-yes** with its `claude` auto-approve wrapper, and make macOS itself tolerable to run agents on — no idle sleep, order-aware lid behavior, and no crash-dialog spam from the headless browsers agent tooling spawns. This reproduces Aryan's standard setup and survives restarts.
 
 Model and effort-floor live in env vars; ultracode and auto mode are session-scoped and so ride on a
 per-launch flag: `ANTHROPIC_MODEL=opus` (the track-latest alias — Opus 5 today, and it picks up the next
@@ -15,7 +15,7 @@ and `--permission-mode auto` are added by the `claude()` wrapper on every launch
 Why it's needed: an org can push a *remote-managed* policy (`~/.claude/remote-settings.json`) that pins the default model to Sonnet and effort to medium. That policy outranks `~/.claude/settings.json`, so editing settings there doesn't stick. The fix is two **input** environment variables that override the *soft* org default. Full background, the env-var facts, and caveats are in [reference.md](reference.md) — read it if anything below is surprising or fails.
 
 All deterministic work is in the tested scripts beside this file. Run them by absolute path —
-`bash "${CLAUDE_PLUGIN_ROOT}/skills/setup-claude-code/scripts/<name>"`, or resolve `scripts/<name>`
+`bash "${CLAUDE_PLUGIN_ROOT}/skills/setup-agent-mac/scripts/<name>"`, or resolve `scripts/<name>`
 relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent their commands.
 
 ## Steps
@@ -34,20 +34,27 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
      when npm is absent — and writes the `agent-yes` block: a `claude()` wrapper that routes through `ay`,
      defaults each launch to **full ultracode** (`--effort ultracode`) and **auto mode**
      (`--permission-mode auto`), and holds a `caffeinate` assertion so runs never idle-sleep;
-   - stages the smart-lid daemon and installer under `~/.local/share/setup-claude-code`, then writes a
-     `keep-awake` block: `awake` (run any command with no idle sleep), a `caffeinate`-wrapped `codex`,
-     legacy global `lidawake on|off`, and the recommended order-aware `lidawake smart-on|smart-off|status`.
+   - stages the smart-lid daemon/installer and the crash-dialog helper under
+     `~/.local/share/setup-agent-mac`, then writes a `keep-awake` block: `awake` (run any command with
+     no idle sleep), a `caffeinate`-wrapped `codex`, legacy global `lidawake on|off`, and the
+     recommended order-aware `lidawake smart-on|smart-off|status`;
+   - writes a `crash-dialogs` block: `crashdialogs off|on|status`, which suppresses the macOS
+     "quit unexpectedly" alert. **Staged but not applied** — like `lidawake smart-on`, it is an explicit
+     opt-in because it needs sudo and affects every app.
    - any archive it downloads (e.g. the Bun release) goes to a scratch dir removed on exit — the script leaves no temp files behind.
 
 3. **Verify.** Run `scripts/verify.sh`. It sources a fresh shell and checks: both env vars are set, `ay`
-   is on PATH, the smart-lid payload and shell commands exist, the `claude()` wrapper carries both
+   is on PATH, the macOS helper payload and shell commands exist, the `claude()` wrapper carries both
    `--effort ultracode` and `--permission-mode auto`, and — via two small `claude -p` API calls — that the
    model actually resolves to an Opus (it prints the exact id the alias landed on) and that ultracode is
    genuinely on at launch (auto mode is accepted in the same call). It prints PASS/FAIL per check and exits
-   non-zero on any failure. For
+   non-zero on any failure. Crash-dialog suppression is opt-in, so verify **reports** its state
+   (`status=enabled|disabled`) rather than failing on it. For
    development or review, also run `tests/test-smart-lid.sh`; it deterministically exercises close-first,
    lock-first, simultaneous sensor changes, the closed-lid 10% battery cutoff, daemon restart, and
-   install/uninstall behavior.
+   install/uninstall behavior — and `tests/test-crash-dialogs.sh`, which stubs `launchctl`/`defaults`
+   to exercise off/on/status, idempotency, the root guard, and the case where `launchctl disable`
+   silently fails.
 
 4. **Report.** State plainly:
    - It applies to **new** sessions — open a new terminal or run `exec $SHELL`; the current one is unchanged.
@@ -62,6 +69,11 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
      LaunchDaemon and change `pmset` safely.
    - Legacy `lidawake on|off` remains available for an unconditional global toggle, but `smart-on` is the
      recommended mode.
+   - **If crashing headless browsers are spamming "quit unexpectedly" dialogs**, run `crashdialogs off`
+     once (prompts for sudo). Say plainly what it costs: the alert is suppressed for **every** app, not
+     just the offender, and `.ips` crash reports stop being written. Check with `crashdialogs status`,
+     revert with `crashdialogs on`. Do not offer Apple's `DialogType` preference as the fix — it does
+     not work on macOS 26.x (see Notes).
    - **Auto mode is on for every wrapper launch** (`--permission-mode auto`): a classifier decides what
      runs without asking, on top of agent-yes auto-approving whatever prompts still appear. Both are trust
      decisions — say so. Override per launch with your own `--permission-mode` (last wins), or use
@@ -90,3 +102,5 @@ blocks and marker names) — never hand-append without the marker blocks, or re-
 - **`lidawake smart-on` intentionally keeps an unlocked, lid-closed Mac awake.** Prefer AC power and do not place it in a bag in that state: it can run hot and drain the battery. Lock before closing whenever you want normal sleep. As a last-resort battery guard, a closed Mac on battery automatically restores sleep at 10%; an open or AC-powered Mac is unaffected. Sensor-read errors and ambiguous post-boot states fail safe by restoring normal sleep.
 - **Smart mode pre-arms `disablesleep 1` while the lid is open and the session is unlocked.** This is necessary to beat immediate clamshell sleep, so ordinary system sleep is also suppressed in that state; the automatic `caffeinate` wrappers still handle agent-specific idle assertions. A bare `lidawake` is read-only and shows status.
 - **`lidawake on` is the legacy global override** and disables sleep until `lidawake off`; do not combine it with smart mode.
+- **Crash dialogs are a symptom, not a fault.** Agent tooling launches short-lived headless Chrome processes (Codex/Claude Code plugins rendering PDFs, browser automation); they abort during startup with a stack ending in `TransformProcessType` → `_RegisterApplication` → `abort()`, and each abort raises a modal alert — often five or ten in a row. The browser the user is actually *using* is a separate long-lived process and is untouched, which is why dismissing the dialogs costs nothing. Never propose reinstalling Chrome or clearing its profile for this.
+- **Apple's documented crash-dialog switch does not work on macOS 26.x.** `defaults write com.apple.CrashReporter DialogType none` reads back correctly from *both* the user and `-currentHost` domains and the dialog still appears (verified on 26.5 / build 25F84 with controlled test crashes). The mechanism that works is disabling the per-user `com.apple.ReportCrash` **agent**, which is what presents the alert. `crashdialogs off` does that and also sets the legacy preference, which is still sufficient on older macOS and inert where it is not.

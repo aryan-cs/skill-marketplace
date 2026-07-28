@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# setup.sh — make Opus + xhigh the persistent default for Claude Code and wire up
-# agent-yes. Idempotent: every change is a marker block, so re-running never duplicates.
+# setup.sh — make Opus + xhigh the persistent default for Claude Code, wire up agent-yes, and
+# stage the macOS helpers (keep-awake, smart lid, crash-dialog suppression).
+# Idempotent: every change is a marker block, so re-running never duplicates.
 #
 # Override the target profile for testing with: CC_SETUP_PROFILE=/tmp/rc ./setup.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SMART_LID_HOME="${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}"
+# Where privileged helper payloads are staged so they survive a marketplace refresh.
+# CC_SMART_LID_HOME is the pre-rename variable, still honored for machines that were set up
+# while this skill was called setup-claude-code.
+AGENT_MAC_HOME="${AGENT_MAC_HOME:-${CC_SMART_LID_HOME:-$HOME/.local/share/setup-agent-mac}}"
 
 # --- pick the shell profile -------------------------------------------------
 detect_profile() {
@@ -23,7 +27,7 @@ cp "$PROFILE" "$PROFILE.cc.bak" 2>/dev/null || true   # rolling backup of the pr
 # --- scratch space ----------------------------------------------------------
 # Any archives this script downloads (e.g. the Bun runtime) go under here and
 # are deleted on exit — the setup leaves no temp files behind.
-CC_TMP="$(mktemp -d "${TMPDIR:-/tmp}/setup-claude-code.XXXXXX")"
+CC_TMP="$(mktemp -d "${TMPDIR:-/tmp}/setup-agent-mac.XXXXXX")"
 cleanup() { rm -rf "$CC_TMP"; }
 trap cleanup EXIT
 
@@ -159,20 +163,21 @@ claude() {
   fi
 }'
 
-# --- 4. smart-lid payload + keep-awake helpers ----------------------------------------------
-# Copy the privileged helper payload out of the plugin cache so it remains available after a
-# marketplace refresh. Installing/removing the LaunchDaemon still requires one explicit sudo.
-mkdir -p "$SMART_LID_HOME"
-install -m 0755 "$SCRIPT_DIR/smart-lid-daemon.sh" "$SMART_LID_HOME/smart-lid-daemon.sh"
-install -m 0755 "$SCRIPT_DIR/install-smart-lid.sh" "$SMART_LID_HOME/install-smart-lid.sh"
-echo "  smart lid: staged helper payload at $SMART_LID_HOME"
+# --- 4. macOS helper payloads + keep-awake helpers ------------------------------------------
+# Copy the privileged helper payloads out of the plugin cache so they remain available after a
+# marketplace refresh. Installing/removing them still requires one explicit sudo each.
+mkdir -p "$AGENT_MAC_HOME"
+install -m 0755 "$SCRIPT_DIR/smart-lid-daemon.sh" "$AGENT_MAC_HOME/smart-lid-daemon.sh"
+install -m 0755 "$SCRIPT_DIR/install-smart-lid.sh" "$AGENT_MAC_HOME/install-smart-lid.sh"
+install -m 0755 "$SCRIPT_DIR/disable-crash-dialogs.sh" "$AGENT_MAC_HOME/disable-crash-dialogs.sh"
+echo "  macOS helpers: staged payload at $AGENT_MAC_HOME"
 
 upsert_block "keep-awake" '# Keep long agent runs alive on macOS. caffeinate stops idle/display/system sleep;
 # `lidawake smart-on` adds order-aware behavior: close-first stays awake; lock-first then close sleeps.
 awake() { caffeinate -dimsu "$@"; }                          # run any command with no idle sleep
 codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
 lidawake() {
-  local sl="'"$SMART_LID_HOME"'/install-smart-lid.sh"
+  local sl="'"$AGENT_MAC_HOME"'/install-smart-lid.sh"
   case "${1:-status}" in
     on)  sudo "$sl" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled — the Mac stays awake with the lid shut. Revert: lidawake off" ;;
     off) sudo "$sl" uninstall ;;
@@ -183,7 +188,29 @@ lidawake() {
   esac
 }'
 
+# --- 5. crash-dialog suppression --------------------------------------------------------------
+# Not applied automatically: it silences the crash alert for EVERY app and stops .ips crash
+# reports, so it stays an explicit opt-in like lidawake.
+upsert_block "crash-dialogs" '# Suppress the macOS "<app> quit unexpectedly" alert. Agent tooling launches short-lived
+# headless browsers (Chrome for PDF rendering, browser automation) that abort during startup, and
+# every abort raises a modal dialog — often five or ten in a row. The browser you are actually
+# using is a separate process and is unaffected, so the alerts are pure noise.
+# `crashdialogs off` disables the per-user ReportCrash agent: it survives reboots, applies to all
+# apps, and also stops .ips crash reports. The documented DialogType preference does NOT work on
+# macOS 26.x — see the skill reference.md. Revert with `crashdialogs on`.
+crashdialogs() {
+  local cdh="'"$AGENT_MAC_HOME"'/disable-crash-dialogs.sh"
+  case "${1:-status}" in
+    off)    sudo "$cdh" off ;;
+    on)     sudo "$cdh" on ;;
+    status) "$cdh" status ;;
+    *)      echo "usage: crashdialogs off|on|status" ;;
+  esac
+}'
+
 echo
 echo "Done. Open a NEW terminal (or run: exec \$SHELL) for the changes to take effect."
 echo "Recommended smart behavior (asks once for your password): lidawake smart-on"
 echo "  close lid first -> stays awake; lock first, then close -> sleeps"
+echo "Optional (asks once for your password): crashdialogs off"
+echo "  silences 'quit unexpectedly' alerts from crashing headless browsers, for every app"

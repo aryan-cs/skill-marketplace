@@ -33,14 +33,19 @@ else
   echo "  FAIL: 'ay' not found (agent-yes not installed / npm bin not on PATH)"; fail=1
 fi
 
-echo "== 3. smart-lid helpers are staged =="
-smart_home="${CC_SMART_LID_HOME:-$HOME/.local/share/setup-claude-code}"
-if [ -x "$smart_home/smart-lid-daemon.sh" ] && [ -x "$smart_home/install-smart-lid.sh" ] \
-  && run 'type lidawake' | grep -q 'function'; then
-  echo "  $smart_home"
+echo "== 3. macOS helpers are staged =="
+agent_mac_home="${AGENT_MAC_HOME:-${CC_SMART_LID_HOME:-$HOME/.local/share/setup-agent-mac}}"
+if [ -x "$agent_mac_home/smart-lid-daemon.sh" ] && [ -x "$agent_mac_home/install-smart-lid.sh" ] \
+  && [ -x "$agent_mac_home/disable-crash-dialogs.sh" ] \
+  && run 'type lidawake' | grep -q 'function' \
+  && run 'type crashdialogs' | grep -q 'function'; then
+  echo "  $agent_mac_home"
   echo "  PASS"
+  # Crash-dialog suppression is opt-in (`crashdialogs off`), exactly like `lidawake smart-on`,
+  # so report which way it is set rather than treating either state as a failure.
+  echo "  crash dialogs: $(run 'crashdialogs status' | grep -E '^status=' | tail -1)"
 else
-  echo "  FAIL: smart-lid scripts or lidawake shell function are missing"; fail=1
+  echo "  FAIL: helper scripts or the lidawake/crashdialogs shell functions are missing"; fail=1
 fi
 
 echo "== 4. the claude wrapper carries the ultracode + auto-mode flags =="
