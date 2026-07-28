@@ -2,6 +2,16 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-28
+
+### Changed
+- `setup-claude-code` now pins **Opus 5** and launches every interactive session on **full ultracode effort with auto mode on**. The `claude-code defaults` block exports the exact id `ANTHROPIC_MODEL="claude-opus-5"` instead of the track-latest `opus` alias (`CLAUDE_CODE_EFFORT_LEVEL="xhigh"` is unchanged — it remains the env-expressible effort *floor* for `command claude` and subagents), and the `agent-yes` `claude()` wrapper now passes `--effort ultracode --permission-mode auto` on all four of its branches. Auto mode, like effort-`ultracode`, is session-scoped with no input env var, so a per-launch flag is the only way to persist it; both stay overridable by passing your own flag (last wins) or bypassing with `command claude`. Re-running `setup.sh` upgrades an existing profile in place — the marker blocks are replaced, not duplicated.
+
+### Added
+- `setup-claude-code` `verify.sh` grew two checks: that the `claude()` wrapper actually carries `--effort ultracode --permission-mode auto`, and a live probe that launches with those flags and confirms the model reports ultracode is on. The latter makes the load-bearing "`ultracode` works as a flag but silently degrades to medium as an env var" claim tested rather than asserted (re-confirmed on Claude Code 2.1.220). Existing check 1 now expects `claude-opus-5`, and the model-resolution check asserts Opus **5** specifically rather than any Opus.
+- `setup-claude-code` `check-policy.sh` warns when the org allowlist names Opus only as an older version, in which case the exact `claude-opus-5` pin may be refused and the `opus` alias is the fallback.
+- `setup-claude-code` reference.md documents auto mode: the full `--permission-mode` set, `claude auto-mode config|defaults|reset`, why the wrapper flag is used over `permissions.defaultMode` in settings.json, and that auto mode and agent-yes are independent layers (fewer prompts vs. auto-answered prompts) — both trust decisions, and both bypassed by `command claude`.
+
 ## [0.7.1] - 2026-07-23
 
 ### Fixed
