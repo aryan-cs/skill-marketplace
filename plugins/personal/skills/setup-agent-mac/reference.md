@@ -1,4 +1,4 @@
-# setup-claude-code — background, the env-var facts, caveats, and reverting
+# setup-agent-mac — background, the env-var facts, caveats, and reverting
 
 ## Why the default kept reverting
 
@@ -117,7 +117,7 @@ claude() {
 awake() { caffeinate -dimsu "$@"; }
 codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
 lidawake() {
-  local sl="$HOME/.local/share/setup-claude-code/install-smart-lid.sh"   # setup.sh bakes the resolved absolute path here
+  local sl="$HOME/.local/share/setup-agent-mac/install-smart-lid.sh"   # setup.sh bakes the resolved absolute path here
   case "${1:-status}" in
     on)  sudo "$sl" uninstall >/dev/null && sudo pmset -a disablesleep 1 && echo "Legacy global mode enabled. Revert: lidawake off" ;;
     off) sudo "$sl" uninstall ;;
@@ -128,6 +128,18 @@ lidawake() {
   esac
 }
 # <<< keep-awake <<<
+
+# >>> crash-dialogs >>>
+crashdialogs() {
+  local cdh="$HOME/.local/share/setup-agent-mac/disable-crash-dialogs.sh"   # resolved absolute path, as above
+  case "${1:-status}" in
+    off)    sudo "$cdh" off ;;
+    on)     sudo "$cdh" on ;;
+    status) "$cdh" status ;;
+    *)      echo "usage: crashdialogs off|on|status" ;;
+  esac
+}
+# <<< crash-dialogs <<<
 ```
 
 Note: `caffeinate ... claude` / `caffeinate ... codex` run the **real binaries** (caffeinate
@@ -207,6 +219,72 @@ also be locked by the organization.
 Safety: close-first deliberately leaves a lidded Mac running. Prefer AC power and never put it in a bag
 in that state; it can run hot and drain the battery. Lock first, then close, whenever you want sleep.
 
+## Crash-dialog suppression (macOS)
+
+### What actually produces the dialogs
+
+Agent tooling shells out to a real browser for headless work — Codex plugins rendering a report to PDF
+(`data-analytics` → `skills/build-report/report-to-pdf` invokes
+`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new`), browser automation, and
+similar. Those launches routinely abort during startup:
+
+```
+Exception Type:  EXC_CRASH (SIGABRT)     abort() called
+  ChromeMain → TransformProcessType → _RegisterApplication → abort
+  parentProc: node      responsibleProc: ChatGPT
+```
+
+The spawned Chrome cannot register with LaunchServices/the window server from that execution context, so
+it aborts before doing any work. One PDF render fires several launches, which is why the alerts arrive in
+bursts. **The browser the user is actually using is a separate long-lived process and is unaffected** —
+tabs survive, nothing is lost. Reinstalling Chrome or clearing its profile does nothing, because Chrome
+is not what is broken.
+
+### Why `DialogType` is not the fix on macOS 26.x
+
+Every guide recommends `defaults write com.apple.CrashReporter DialogType none`. On macOS 26.5
+(build 25F84) it is **silently ignored**. Verified by controlled test crashes rather than assumed:
+
+- the key reads back as `none` from both the user domain and `-currentHost`, and is present on disk in
+  `~/Library/Preferences/com.apple.CrashReporter.plist`;
+- `ReportCrash` still contains both the `DialogType` key and the `none` value in its string table, so the
+  value is not merely unrecognized;
+- no MDM configuration profile overrides it (nothing matching `CrashReporter` in `/Library/Managed Preferences`);
+- a deliberate `SIGABRT` still raised the dialog, with a `ReportCrash agent` process holding it open.
+
+### What works: disable the agent that presents the alert
+
+The alert is drawn by the per-user `com.apple.ReportCrash` **agent**. Disabling that service suppresses it:
+
+```sh
+sudo launchctl disable gui/$(id -u)/com.apple.ReportCrash
+sudo launchctl bootout  gui/$(id -u)/com.apple.ReportCrash   # dismisses one already on screen
+```
+
+`launchctl disable` writes to launchd's per-user disabled database, so it **persists across reboots** and
+is reversed with `launchctl enable`. SIP is irrelevant here: SIP protects the LaunchAgent plist in
+`/System/Library/LaunchAgents` (so `unload -w` is not an option on a stock machine), but it does not
+protect the disabled database, which is why `disable` is the supported route.
+
+Two details the script handles:
+
+- **The domain belongs to the user, not root.** It needs sudo, but the target is `gui/<uid>`, so the uid
+  is resolved from `SUDO_UID` (falling back to `id -u`). Passing root's uid would disable nothing useful.
+- **The legacy preference is still set**, dropped back to the invoking user with `sudo -u`. It is
+  sufficient on macOS < 26 and inert on 26.x, so setting it costs nothing and helps on older machines.
+
+Then it re-reads `launchctl print-disabled` and fails loudly if the state did not actually change —
+the exact failure mode that made `DialogType` look like it had worked.
+
+### Cost, and how to check or revert
+
+- It applies to **every app**, not just the crashing headless browsers. Nothing will pop up to tell you a
+  real app died; it will just be gone.
+- **`.ips` crash reports stop being written** to `~/Library/Logs/DiagnosticReports`. Existing reports are
+  untouched, but new ones are not generated, so re-enable before investigating a genuine crash.
+- `crashdialogs status` prints the live state (`status=disabled|enabled`, plus the `DialogType` value);
+  `crashdialogs on` restores both the agent and crash-report generation.
+
 ## Caveats
 
 - **Cost:** Opus is significantly pricier than the org's Sonnet default — usually the whole
@@ -220,6 +298,9 @@ in that state; it can run hot and drain the battery. Lock first, then close, whe
 - **Auto mode is a trust setting.** It is on for every wrapper launch. Undo it for one session with
   `claude --permission-mode manual …` (last wins) or `command claude`; undo it permanently by removing
   the flag from the `agent-yes` block. `claude auto-mode config` shows the rules actually in force.
+- **Crash-dialog suppression trades visibility for quiet.** It is opt-in for that reason: it hides
+  crashes from *every* app and stops crash-report generation, so a genuinely broken app fails silently.
+  Turn it back on with `crashdialogs on` before diagnosing a real crash.
 - **Per machine:** these are shell env vars, so run the skill once per machine. The org policy
   follows your account; env vars do not.
 
@@ -230,4 +311,13 @@ block (and the `# >>> agent-yes >>>` and `# >>> bun runtime >>>` blocks if you w
 back), then run `exec $SHELL`. To remove agent-yes entirely: `npm uninstall -g agent-yes` (or
 `bun remove -g agent-yes`). To remove Bun: `rm -rf ~/.bun`. If smart-lid mode was installed, run
 `lidawake smart-off` first; this unloads the LaunchDaemon, removes its two installed files, and restores
-normal sleep.
+normal sleep. If crash dialogs were suppressed, run `crashdialogs on` before removing the
+`# >>> crash-dialogs >>>` block — the `launchctl disable` it performed lives in launchd's database, not
+in the shell profile, so deleting the block alone leaves the agent disabled with no convenient way back.
+
+**Migrating from `setup-claude-code`:** the staged payload moved from `~/.local/share/setup-claude-code`
+to `~/.local/share/setup-agent-mac`. Re-running `setup.sh` stages the helpers at the new path and rewrites
+the `keep-awake`/`crash-dialogs` blocks to point at it; an installed smart-lid LaunchDaemon keeps working
+throughout, because it runs from its own copy under `/usr/local/libexec`. The old directory is left in
+place and can be deleted once `lidawake status` works. `CC_SMART_LID_HOME` is still honored as an
+override for machines pinned to the old location.
