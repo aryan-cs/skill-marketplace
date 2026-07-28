@@ -2,6 +2,11 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-28
+
+### Added
+- `setup-claude-code` smart-lid mode now has a last-resort battery cutoff: while the lid is closed, it checks battery about once per minute (and immediately on lid close); when the Mac is drawing from battery power at 10% or less, it restores `disablesleep 0` and requests immediate system sleep. Open-lid and AC-powered sessions are unaffected, while three consecutive unreadable battery samples conservatively restore sleep. `lidawake status` now reports power source, battery percentage, and the cutoff, and the deterministic suite covers threshold, AC/open-lid exclusions, real `pmset -g batt` parsing, telemetry failure, and the full daemon-to-`pmset sleepnow` path.
+
 ## [0.8.0] - 2026-07-28
 
 ### Changed
