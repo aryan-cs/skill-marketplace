@@ -85,12 +85,13 @@ ensure_bun() {
 echo "Profile: $PROFILE"
 
 # --- 1. model + effort defaults --------------------------------------------
-upsert_block "claude-code defaults" '# Opus 5 as the default model; xhigh as the effort FLOOR for non-interactive / subagent
+upsert_block "claude-code defaults" '# Latest Opus as the default model; xhigh as the effort FLOOR for non-interactive / subagent
 # runs and `command claude`. INPUT env vars overriding a soft org-managed default. The interactive `claude`
 # wrapper upgrades to full ultracode via `--effort ultracode` — that value is NOT valid as an env var (it
-# silently drops to medium), so xhigh is the closest env-expressible floor. The exact id pins Opus 5; use
-# the `opus` alias instead if you want to track the newest Opus. Revert: delete, then `exec $SHELL`.
-export ANTHROPIC_MODEL="claude-opus-5"
+# silently drops to medium), so xhigh is the closest env-expressible floor. The `opus` alias tracks the
+# newest Opus (Opus 5 today) and rolls forward on its own; pin an exact id like `claude-opus-5` instead if
+# you ever need to hold a specific version. Revert: delete, then `exec $SHELL`.
+export ANTHROPIC_MODEL="opus"
 export CLAUDE_CODE_EFFORT_LEVEL="xhigh"'
 
 # --- 2. Bun runtime + agent-yes ---------------------------------------------

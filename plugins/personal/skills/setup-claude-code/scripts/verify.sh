@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # verify.sh — prove the setup took, using the exact working incantations.
-# Makes TWO small `claude -p` API calls: one to confirm the model resolves to Opus 5, and one
+# Makes TWO small `claude -p` API calls: one to confirm the model resolves to Opus, and one
 # to confirm the wrapper's `--effort ultracode --permission-mode auto` flags are live (ultracode
 # is only observable at runtime — the env var cannot express it).
 # macOS notes baked in: no `timeout` (absent on macOS); write claude's JSON to a temp
@@ -20,8 +20,8 @@ echo "== 1. env vars in a fresh $NAME shell =="
 env_line="$(run 'printf "ANTHROPIC_MODEL=%s CLAUDE_CODE_EFFORT_LEVEL=%s\n" "$ANTHROPIC_MODEL" "$CLAUDE_CODE_EFFORT_LEVEL"')"
 echo "  $env_line"
 case "$env_line" in
-  *ANTHROPIC_MODEL=claude-opus-5*CLAUDE_CODE_EFFORT_LEVEL=xhigh*) echo "  PASS" ;;
-  *) echo "  FAIL: expected ANTHROPIC_MODEL=claude-opus-5 and CLAUDE_CODE_EFFORT_LEVEL=xhigh"; fail=1 ;;
+  *ANTHROPIC_MODEL=opus*CLAUDE_CODE_EFFORT_LEVEL=xhigh*) echo "  PASS" ;;
+  *) echo "  FAIL: expected ANTHROPIC_MODEL=opus and CLAUDE_CODE_EFFORT_LEVEL=xhigh"; fail=1 ;;
 esac
 
 echo "== 2. agent-yes on PATH =="
@@ -57,7 +57,7 @@ else
   echo "  FAIL: the claude() wrapper is missing --effort ultracode and/or --permission-mode auto"; fail=1
 fi
 
-echo "== 5. model actually resolves to Opus 5 (one small API call) =="
+echo "== 5. model actually resolves to the latest Opus (one small API call) =="
 TMP="$(mktemp)"
 run "command claude -p 'reply with exactly: ok' --output-format json" > "$TMP"
 # Interactive-shell startup can print banners (e.g. "Restored session:") ahead of the
@@ -74,10 +74,13 @@ if d is None:
     print("  FAIL: no result JSON found in claude output"); sys.exit(1)
 models = list(d.get("modelUsage", {}).keys())
 print("  resolved models:", models)
-# A background claude-haiku-* alongside the main model is normal.
-sys.exit(0 if any("opus-5" in m for m in models) else 1)
+# A background claude-haiku-* alongside the main model is normal. The assertion is family-level
+# on purpose: `opus` is a track-latest alias, so pinning an exact version here would turn the
+# next Opus release into a spurious FAIL. The resolved id is printed above — eyeball it if you
+# care which Opus the alias landed on today.
+sys.exit(0 if any("opus" in m for m in models) else 1)
 PY
-if [ $? -eq 0 ]; then echo "  PASS: Opus 5 is the resolved default"; else echo "  FAIL: Opus 5 did not resolve"; fail=1; fi
+if [ $? -eq 0 ]; then echo "  PASS: Opus is the resolved default"; else echo "  FAIL: Opus did not resolve"; fail=1; fi
 rm -f "$TMP"
 
 echo "== 6. ultracode + auto mode are live at launch (one small API call) =="

@@ -24,14 +24,15 @@ every machine you sign into (personal and work alike).
 The pin above is a **soft default**: `availableModels` *includes* `opus` and there is no
 `enforceAvailableModels`, so Opus is allowed — the org merely chose Sonnet as the default.
 Two **input** environment variables, read by the CLI at startup, override that soft default.
-Verified empirically: `ANTHROPIC_MODEL=claude-opus-5` resolves to `claude-opus-5` (confirmed via
-`--output-format json` → `modelUsage`) even with the Sonnet policy active.
+Verified empirically: both `ANTHROPIC_MODEL=opus` and the exact `ANTHROPIC_MODEL=claude-opus-5` resolve to
+`claude-opus-5` (confirmed via `--output-format json` → `modelUsage`) even with the Sonnet policy active.
 
-- `ANTHROPIC_MODEL="claude-opus-5"` — sets the default model. This skill pins the **exact id** so the
-  machine stays on Opus 5; the bare `opus` alias tracks whatever the newest Opus is instead. Note the
-  allowlist entry is the alias `opus`, and the exact id still resolves — an allowlist is not a
-  requirement that you *name* the model the same way. The trade-off of pinning: no automatic roll-forward,
-  so re-run the skill when a successor ships.
+- `ANTHROPIC_MODEL="opus"` — sets the default model. This skill uses the **track-latest alias** so the
+  machine auto-upgrades to each new Opus with no edit and no re-run; it resolves to `claude-opus-5` today.
+  Pin an exact id (`claude-opus-5`) instead only if you need to hold a specific version — an exact id
+  resolves fine even though the org allowlist names the alias, since an allowlist is not a requirement that
+  you *name* the model the same way. The trade-off of the alias is the flip side of its benefit: the model
+  can change under you without warning, so `verify.sh` prints whichever id it actually resolved to.
 - `CLAUDE_CODE_EFFORT_LEVEL="xhigh"` — the real effort input var and the effort **floor** for
   non-interactive/subagent runs and `command claude`. It outranks even an in-session `/effort` choice.
 
@@ -84,8 +85,8 @@ replace rather than duplicate). In the shell profile:
 
 ```sh
 # >>> claude-code defaults >>>
-# Opus 5 default model; xhigh = effort FLOOR (the interactive wrapper upgrades to full ultracode + auto mode).
-export ANTHROPIC_MODEL="claude-opus-5"
+# Latest Opus as the default model; xhigh = effort FLOOR (the wrapper upgrades to full ultracode + auto mode).
+export ANTHROPIC_MODEL="opus"
 export CLAUDE_CODE_EFFORT_LEVEL="xhigh"
 # <<< claude-code defaults <<<
 
@@ -208,12 +209,14 @@ in that state; it can run hot and drain the battery. Lock first, then close, whe
 
 ## Caveats
 
-- **Cost:** Opus 5 is significantly pricier than the org's Sonnet default — usually the whole
+- **Cost:** Opus is significantly pricier than the org's Sonnet default — usually the whole
   reason an org defaults to Sonnet. Ultracode compounds it: it spawns workflows freely, so it is the
   most expensive mode of the most expensive model. This setup is a deliberate quality-over-cost choice.
 - **Context window:** the policy model was Sonnet 4.6 with 1M context; Opus 5 is standard
   (200k). For a huge one-off, `/model` switch in-session.
-- **Pinned, not tracking:** `claude-opus-5` is an exact id, so no automatic upgrade to a future Opus.
+- **Tracking, not pinned:** `opus` is an alias, so the machine auto-upgrades to each new Opus. That is
+  intentional, but the model *can* change without you doing anything — including its price and context
+  window. `verify.sh` prints the resolved id; `/model` or an exact `ANTHROPIC_MODEL` holds a version.
 - **Auto mode is a trust setting.** It is on for every wrapper launch. Undo it for one session with
   `claude --permission-mode manual …` (last wins) or `command claude`; undo it permanently by removing
   the flag from the `agent-yes` block. `claude auto-mode config` shows the rules actually in force.
