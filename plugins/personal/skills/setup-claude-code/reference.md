@@ -24,11 +24,15 @@ every machine you sign into (personal and work alike).
 The pin above is a **soft default**: `availableModels` *includes* `opus` and there is no
 `enforceAvailableModels`, so Opus is allowed — the org merely chose Sonnet as the default.
 Two **input** environment variables, read by the CLI at startup, override that soft default.
-Verified empirically: both `--model opus` and `ANTHROPIC_MODEL=opus` resolve to
-`claude-opus-4-8` even with the Sonnet policy active.
+Verified empirically: both `ANTHROPIC_MODEL=opus` and the exact `ANTHROPIC_MODEL=claude-opus-5` resolve to
+`claude-opus-5` (confirmed via `--output-format json` → `modelUsage`) even with the Sonnet policy active.
 
-- `ANTHROPIC_MODEL="opus"` — sets the default model. The alias `opus` tracks the latest Opus;
-  pin `claude-opus-4-8` instead for an exact version.
+- `ANTHROPIC_MODEL="opus"` — sets the default model. This skill uses the **track-latest alias** so the
+  machine auto-upgrades to each new Opus with no edit and no re-run; it resolves to `claude-opus-5` today.
+  Pin an exact id (`claude-opus-5`) instead only if you need to hold a specific version — an exact id
+  resolves fine even though the org allowlist names the alias, since an allowlist is not a requirement that
+  you *name* the model the same way. The trade-off of the alias is the flip side of its benefit: the model
+  can change under you without warning, so `verify.sh` prints whichever id it actually resolved to.
 - `CLAUDE_CODE_EFFORT_LEVEL="xhigh"` — the real effort input var and the effort **floor** for
   non-interactive/subagent runs and `command claude`. It outranks even an in-session `/effort` choice.
 
@@ -47,8 +51,32 @@ the model receives the live *"Ultracode is on…"* system context and higher thi
 env var or plain `xhigh` it does not. Pass your own `--effort X` to override (last wins), or
 `command claude` to fall back to the xhigh env floor.
 
-If the org later sets `enforceAvailableModels: true` or drops `opus` from `availableModels`,
-these overrides stop working and it becomes an admin request — nothing local will fix it.
+Re-verified on Claude Code 2.1.220 while adding auto mode: launching with `--effort ultracode` and asking
+the model whether its context says ultracode is on answers **yes**; the same probe under
+`CLAUDE_CODE_EFFORT_LEVEL=ultracode` answers **no**. `verify.sh` check 6 is exactly that probe, so this
+claim is tested rather than asserted. (Note `--effort`'s `--help` line lists only `low|medium|high|xhigh|max`
+— `ultracode` is accepted but undocumented there, which is why the empirical check matters.)
+
+### Auto mode is per-launch too
+
+`--permission-mode auto` is the CLI's auto mode: a classifier decides which tool calls run without a
+prompt, instead of asking on each one. The full set is
+`acceptEdits | auto | bypassPermissions | manual | dontAsk | plan`, and the shipped rules are inspectable
+with `claude auto-mode config` / `claude auto-mode defaults`, tunable in the `autoMode` section of
+`~/.claude/settings.json`, and revertible with `claude auto-mode reset`.
+
+Like effort-`ultracode`, it is **session-scoped with no input env var**, so the `claude()` wrapper supplies
+it on every launch. A user-level `permissions.defaultMode` in `~/.claude/settings.json` is the alternative
+(the current org policy sets `permissions.ask`/`deny` but *not* `defaultMode`, so it would take effect) —
+the wrapper flag is used instead to keep every persistent choice in one shell block, and because a flag is
+trivially overridable per launch (`claude --permission-mode manual …`) while a settings key is not.
+
+Auto mode and agent-yes are independent layers: auto mode reduces how many prompts appear at all, agent-yes
+answers the ones that still do. Neither implies the other, and `command claude` bypasses both.
+
+If the org later sets `enforceAvailableModels: true`, drops `opus` from `availableModels`, or pins
+`permissions.defaultMode`, these overrides stop working and it becomes an admin request — nothing local
+will fix it.
 
 ## The exact blocks the script writes
 
@@ -57,7 +85,7 @@ replace rather than duplicate). In the shell profile:
 
 ```sh
 # >>> claude-code defaults >>>
-# Opus default model; xhigh = effort FLOOR (the interactive wrapper upgrades to full ultracode).
+# Latest Opus as the default model; xhigh = effort FLOOR (the wrapper upgrades to full ultracode + auto mode).
 export ANTHROPIC_MODEL="opus"
 export CLAUDE_CODE_EFFORT_LEVEL="xhigh"
 # <<< claude-code defaults <<<
@@ -71,15 +99,15 @@ export PATH="$HOME/.bun/bin:$PATH"
 claude() {
   if command -v caffeinate >/dev/null 2>&1; then
     if command -v ay >/dev/null 2>&1; then
-      caffeinate -dimsu ay claude -- --effort ultracode "$@"
+      caffeinate -dimsu ay claude -- --effort ultracode --permission-mode auto "$@"
     else
-      caffeinate -dimsu claude --effort ultracode "$@"
+      caffeinate -dimsu claude --effort ultracode --permission-mode auto "$@"
     fi
   else
     if command -v ay >/dev/null 2>&1; then
-      command ay claude -- --effort ultracode "$@"
+      command ay claude -- --effort ultracode --permission-mode auto "$@"
     else
-      command claude --effort ultracode "$@"
+      command claude --effort ultracode --permission-mode auto "$@"
     fi
   fi
 }
@@ -109,9 +137,10 @@ fallbacks use `command` to bypass the function.
 ## agent-yes (runs on Bun)
 
 `agent-yes` provides the `ay` command and wraps Claude Code to auto-approve permission prompts
-for unattended runs. The `claude()` function routes `claude ...` through `ay claude -- ...`;
-bypass it once with `command claude ...`. This auto-approves tool actions — a trust decision —
-so only enable it where you're comfortable with that.
+for unattended runs. The `claude()` function routes `claude ...` through `ay claude -- ...` and adds
+`--effort ultracode --permission-mode auto`; bypass all of it once with `command claude ...`. That
+combination auto-approves tool actions *and* skips many prompts outright — a trust decision — so only
+enable it where you're comfortable with that.
 
 **It requires the Bun runtime.** `ay` (and every `*-yes` bin) starts with `#!/usr/bin/env bun`,
 so with only Node installed it fails at runtime — the wrapper never launches Claude Code:
@@ -181,9 +210,16 @@ in that state; it can run hot and drain the battery. Lock first, then close, whe
 ## Caveats
 
 - **Cost:** Opus is significantly pricier than the org's Sonnet default — usually the whole
-  reason an org defaults to Sonnet.
-- **Context window:** the policy model was Sonnet 4.6 with 1M context; Opus 4.8 is standard
+  reason an org defaults to Sonnet. Ultracode compounds it: it spawns workflows freely, so it is the
+  most expensive mode of the most expensive model. This setup is a deliberate quality-over-cost choice.
+- **Context window:** the policy model was Sonnet 4.6 with 1M context; Opus 5 is standard
   (200k). For a huge one-off, `/model` switch in-session.
+- **Tracking, not pinned:** `opus` is an alias, so the machine auto-upgrades to each new Opus. That is
+  intentional, but the model *can* change without you doing anything — including its price and context
+  window. `verify.sh` prints the resolved id; `/model` or an exact `ANTHROPIC_MODEL` holds a version.
+- **Auto mode is a trust setting.** It is on for every wrapper launch. Undo it for one session with
+  `claude --permission-mode manual …` (last wins) or `command claude`; undo it permanently by removing
+  the flag from the `agent-yes` block. `claude auto-mode config` shows the rules actually in force.
 - **Per machine:** these are shell env vars, so run the skill once per machine. The org policy
   follows your account; env vars do not.
 

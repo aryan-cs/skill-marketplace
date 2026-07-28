@@ -41,6 +41,15 @@ def opus_allowed(avail):
 
 if opus_allowed(avail):
     print("VERDICT: OVERRIDABLE — Opus is allowed; ANTHROPIC_MODEL=opus will win. Proceed.")
+    # The skill uses the track-latest `opus` alias, so what it resolves to changes as new Opus
+    # models ship. An allowlist that names only specific older versions still passes the check
+    # above but may not carry the alias forward, so surface it instead of letting verify.sh fail
+    # with no explanation.
+    if avail is not None:
+        entries = [str(m) for m in avail if "opus" in str(m).lower()]
+        if entries and not any(e.lower() == "opus" for e in entries):
+            print("NOTE: the allowlist names Opus only as %s, not the bare `opus` alias — if the" % entries)
+            print("      alias is refused, pin one of those exact ids in ANTHROPIC_MODEL instead.")
     sys.exit(0)
 else:
     print("VERDICT: HARD-LOCKED — Opus is not in the org allowlist, so the env-var override")
