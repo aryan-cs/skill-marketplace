@@ -1,6 +1,6 @@
 ---
 name: setup-claude-code
-description: "Sets up Claude Code on a machine the way Aryan likes it — defaults the model to the latest Opus (Opus 5 today, and it rolls forward on its own) with xhigh as the env effort floor, launches every interactive session on full ultracode effort with auto mode on, installs agent-yes with the auto-approve `claude` wrapper, and adds macOS keep-awake helpers including order-aware lid behavior: close first to keep running, or lock first and then close to sleep. Use when the user asks to set up Claude Code, configure a new machine/laptop, make Opus or ultracode/xhigh the default, auto-upgrade to the newest Opus, turn auto mode (`--permission-mode auto`) on by default, stop the model reverting to Sonnet or medium effort on restart, install agent-yes, keep Claude Code/Codex running with the lid closed, or make lid sleep depend on whether the Mac was explicitly locked first."
+description: "Sets up Claude Code on a machine the way Aryan likes it — defaults the model to the latest Opus (Opus 5 today, and it rolls forward on its own) with xhigh as the env effort floor, launches every interactive session on full ultracode effort with auto mode on, installs agent-yes with the auto-approve `claude` wrapper, and adds macOS keep-awake helpers including order-aware lid behavior: close first to keep running, lock first and then close to sleep, and automatically restore sleep at 10% battery while closed. Use when the user asks to set up Claude Code, configure a new machine/laptop, make Opus or ultracode/xhigh the default, auto-upgrade to the newest Opus, turn auto mode (`--permission-mode auto`) on by default, stop the model reverting to Sonnet or medium effort on restart, install agent-yes, keep Claude Code/Codex running with the lid closed, make lid sleep depend on whether the Mac was explicitly locked first, or prevent closed-lid keep-awake mode from draining the battery completely."
 ---
 
 # Set up Claude Code
@@ -46,15 +46,20 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
    genuinely on at launch (auto mode is accepted in the same call). It prints PASS/FAIL per check and exits
    non-zero on any failure. For
    development or review, also run `tests/test-smart-lid.sh`; it deterministically exercises close-first,
-   lock-first, simultaneous sensor changes, daemon restart, and install/uninstall behavior.
+   lock-first, simultaneous sensor changes, the closed-lid 10% battery cutoff, daemon restart, and
+   install/uninstall behavior.
 
 4. **Report.** State plainly:
    - It applies to **new** sessions — open a new terminal or run `exec $SHELL`; the current one is unchanged.
    - **For order-aware lid behavior**, run `lidawake smart-on` once in a normal terminal. Closing the lid
      while unlocked keeps the Mac and its agents running; pressing Touch ID/power to lock while the lid is
-     open arms normal sleep, so closing it afterward sleeps immediately. Inspect with `lidawake status` and
-     fully revert with `lidawake smart-off`. The one-time install prompts for sudo because the state watcher
-     must run as a root LaunchDaemon and change `pmset` safely.
+     open arms normal sleep, so closing it afterward sleeps immediately. If a close-first session runs on
+     battery and reaches 10% while still closed, the daemon restores normal sleep and requests it
+     immediately; AC power and an open lid do not trigger the cutoff. If battery status cannot be read three
+     consecutive times, it conservatively restores sleep rather than running closed without a working guard.
+     Inspect the lid, power source, percentage, and cutoff with `lidawake status`, and fully revert with
+     `lidawake smart-off`. The one-time install prompts for sudo because the state watcher must run as a root
+     LaunchDaemon and change `pmset` safely.
    - Legacy `lidawake on|off` remains available for an unconditional global toggle, but `smart-on` is the
      recommended mode.
    - **Auto mode is on for every wrapper launch** (`--permission-mode auto`): a classifier decides what
@@ -82,6 +87,6 @@ blocks and marker names) — never hand-append without the marker blocks, or re-
 - **agent-yes auto-approves tool prompts, and auto mode skips many of them entirely** — both are trust decisions. If the user doesn't want unattended approvals, install the defaults block but skip the agent-yes wrapper (or drop `--permission-mode auto` from it and keep the ultracode flag).
 - **agent-yes runs on Bun.** Its `ay` binary starts with `#!/usr/bin/env bun`, so without Bun on PATH the `claude` wrapper dies at `env: bun: No such file or directory` (the package's `engines` claims `node>=22`, but the shipped entry is a Bun script). `setup.sh` installs Bun user-local (`~/.bun`, no sudo) and can also install agent-yes itself via `bun install -g` when npm is missing. Bypass the wrapper anytime with `command claude`.
 - **Keep-awake is macOS-only** (`caffeinate`, `ioreg`, `launchd`, `pmset`). On other platforms skip block 4; the model/effort/agent-yes parts still apply.
-- **`lidawake smart-on` intentionally keeps an unlocked, lid-closed Mac awake.** Prefer AC power and do not place it in a bag in that state: it can run hot and drain the battery. Lock before closing whenever you want normal sleep. Sensor-read errors and ambiguous post-boot states fail safe by restoring normal sleep.
+- **`lidawake smart-on` intentionally keeps an unlocked, lid-closed Mac awake.** Prefer AC power and do not place it in a bag in that state: it can run hot and drain the battery. Lock before closing whenever you want normal sleep. As a last-resort battery guard, a closed Mac on battery automatically restores sleep at 10%; an open or AC-powered Mac is unaffected. Sensor-read errors and ambiguous post-boot states fail safe by restoring normal sleep.
 - **Smart mode pre-arms `disablesleep 1` while the lid is open and the session is unlocked.** This is necessary to beat immediate clamshell sleep, so ordinary system sleep is also suppressed in that state; the automatic `caffeinate` wrappers still handle agent-specific idle assertions. A bare `lidawake` is read-only and shows status.
 - **`lidawake on` is the legacy global override** and disables sleep until `lidawake off`; do not combine it with smart mode.
