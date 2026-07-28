@@ -2,7 +2,7 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
-## [0.9.0] - 2026-07-28
+## [0.10.0] - 2026-07-28
 
 ### Changed
 - **`setup-claude-code` is now `setup-agent-mac`** — folder, frontmatter `name`, and therefore the `/personal:` command. The skill had outgrown the name: it configures Codex alongside Claude Code, and a growing share of what it does is machine-level macOS work (idle sleep, clamshell behavior, crash alerts) rather than configuring one CLI. The staged helper payload moved from `~/.local/share/setup-claude-code` to `~/.local/share/setup-agent-mac`; re-running `setup.sh` stages the helpers at the new path and rewrites the shell blocks to match. An already-installed smart-lid LaunchDaemon keeps running throughout, because it executes its own copy under `/usr/local/libexec` rather than the staged one, and `CC_SMART_LID_HOME` is still honored as an override for machines pinned to the old location. The old directory is left in place rather than deleted.
@@ -12,6 +12,11 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 - Worked around and documented a macOS 26.x regression: `defaults write com.apple.CrashReporter DialogType none` — the fix every guide recommends — is **silently ignored** on 26.5 (build 25F84). Established by controlled test crashes, not assumption: the key reads back as `none` from both the user and `-currentHost` domains, `ReportCrash` still carries the `DialogType` key and the `none` value in its string table, and no MDM profile overrides it, yet the dialog still appears. The mechanism that works is `launchctl disable gui/<uid>/com.apple.ReportCrash`, which disables the per-user agent that presents the alert and persists across reboots. SIP does not block it — SIP protects the LaunchAgent plist, not launchd's disabled database. The script resolves the target uid from `SUDO_UID` (the domain belongs to the user, not root), drops back to the user with `sudo -u` to set the legacy preference for machines on older macOS where it *is* sufficient, and then re-reads `print-disabled` and fails loudly if nothing changed — the precise failure mode that made `DialogType` look like it had worked.
 - `setup-agent-mac` `tests/test-crash-dialogs.sh` — deterministic coverage with `launchctl`/`defaults` stubbed, so the real launchd database and preference domain are never touched: off/on/status, idempotent re-runs, a stale agent that is already gone, the root guard (exit 77) with `status` still usable unprivileged, usage errors (exit 64), unreadable launchd state reported as `unknown`, and a `launchctl disable` that silently no-ops being reported as a failure rather than a success.
 - `setup-agent-mac` `verify.sh` check 3 now also requires the crash-dialog helper and the `crashdialogs` shell function, and prints the live suppression state. It deliberately does not fail on that state — suppression is opt-in, so either setting is correct.
+
+## [0.9.0] - 2026-07-28
+
+### Added
+- `setup-claude-code` smart-lid mode now has a last-resort battery cutoff: while the lid is closed, it checks battery about once per minute (and immediately on lid close); when the Mac is drawing from battery power at 10% or less, it restores `disablesleep 0` and requests immediate system sleep. Open-lid and AC-powered sessions are unaffected, while three consecutive unreadable battery samples conservatively restore sleep. `lidawake status` now reports power source, battery percentage, and the cutoff, and the deterministic suite covers threshold, AC/open-lid exclusions, real `pmset -g batt` parsing, telemetry failure, and the full daemon-to-`pmset sleepnow` path.
 
 ## [0.8.0] - 2026-07-28
 
