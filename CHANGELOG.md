@@ -2,6 +2,18 @@
 
 All notable changes to the `personal` plugin are recorded here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **`setup-agent-mac` smart-lid: the low-battery cutoff never ran with the lid open, so an agent session could still drain to 0%** ([#9](https://github.com/aryan-cs/skill-marketplace/issues/9)). `enforce_low_battery_sleep` returned early unless `prev_closed=1`, but the usual shape of a long agent run is *lid open* on battery — and `unlocked-open` pre-arms `disablesleep 1`, so the machine was held awake all the way down. Reproduced on a real Mac, which drained to empty rather than sleeping, and in simulation: at 3%/2%/1% on battery with the lid open, the daemon reported `disablesleep=1 sleepnow=0` on every sample. The guard now runs in every lid position, keyed on "are we holding the machine awake" rather than on lid state.
+- **Clearing `disablesleep` was not sufficient on its own.** The `claude()`/`codex()`/`awake()` wrappers this same skill installs run under `caffeinate -dimsu`, and `-i` holds a `PreventUserIdleSystemSleep` assertion that `pmset` does not override (`-s` is AC-only, so it is `-i` that matters on battery). The daemon contained no reference to `caffeinate`, so those holds survived the cutoff. It now also signals the `caffeinate` processes. This does **not** kill the sessions: `caffeinate CMD` runs `CMD` as its *parent* and re-execs itself as a child, verified by observing the system-wide assertion count fall by one while the wrapped process stayed alive. PIDs are signalled individually and never as a process group, with a test that fails if that ever changes. Opt out with `SMART_LID_RELEASE_CAFFEINATE=0`.
+
+### Changed
+- The cutoff is now **20%** (was 10%) and configurable via `SMART_LID_LOW_BATTERY_PERCENT`. 10% leaves little margin to write memory to disk before macOS's own critical-battery handling takes over.
+- Safety states are latched and released independently of lid position, and are re-evaluated every cycle rather than on the throttled sampling interval — otherwise a latch taken while closed could not be released once power returned. Phases renamed accordingly: `closed-low-battery-sleep` → `low-battery-sleep`, `closed-battery-unavailable-sleep` → `battery-unavailable-sleep`.
+- Returning to AC, or recovering above the cutoff, now releases the latch and restores normal lid behavior without needing another lid event.
+- `tests/test-smart-lid.sh` grew from 18 to 24 cases, adding: the lid-open guard, AC exclusion at any charge, latch release on recovery, the `caffeinate` release (including the never-signal-a-process-group rule and the opt-out), and a live `caffeinate` test asserting the assertion drops while the wrapped command survives.
+
 ## [0.10.0] - 2026-07-28
 
 ### Changed

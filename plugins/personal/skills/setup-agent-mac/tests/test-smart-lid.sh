@@ -56,29 +56,47 @@ echo "== simultaneous closed+locked sample is treated as close-first =="
 out="$(printf '0 0\n1 1\n' | SMART_LID_STATE_FILE="$TMP/state-c" "$DAEMON" simulate)"
 assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 
-echo "== closed lid sleeps when battery falls to ten percent =="
-out="$(printf '0 0 battery 10\n0 1 battery 11\n1 1 battery 10\n' | \
+echo "== closed lid sleeps when battery falls to the cutoff =="
+out="$(printf '0 0 battery 20\n0 1 battery 21\n1 1 battery 20\n' | \
   SMART_LID_STATE_FILE="$TMP/state-low-battery" "$DAEMON" simulate)"
-assert_line "$out" 1 "phase=unlocked-open disablesleep=1 sleepnow=0"
+assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
 assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
-assert_line "$out" 3 "phase=closed-low-battery-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 3 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
 
-echo "== low battery does not sleep while open or connected to AC =="
-out="$(printf '0 0 battery 5\n0 1 ac 5\n1 1 ac 5\n1 1 battery 5\n' | \
+echo "== an OPEN lid on battery is guarded too (issue #9) =="
+# The original guard exempted the lid-open case, so a long agent run on battery
+# stayed pinned awake by disablesleep=1 all the way to 0%.
+out="$(printf '0 0 battery 3\n0 0 battery 2\n0 0 battery 1\n' | \
+  SMART_LID_STATE_FILE="$TMP/state-low-battery-open" "$DAEMON" simulate)"
+assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 2 "disablesleep=0"
+assert_line "$out" 3 "disablesleep=0"
+
+echo "== AC power never trips the cutoff, at any charge =="
+out="$(printf '0 0 ac 5\n0 1 ac 5\n1 1 ac 5\n1 1 battery 5\n' | \
   SMART_LID_STATE_FILE="$TMP/state-low-battery-ac" "$DAEMON" simulate)"
 assert_line "$out" 1 "phase=unlocked-open disablesleep=1 sleepnow=0"
 assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 assert_line "$out" 3 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
-assert_line "$out" 4 "phase=closed-low-battery-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 4 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
 
-echo "== periodic battery checks are throttled between closed-lid samples =="
-out="$(printf '0 0 battery 11\n0 1 battery 11\n1 1 battery 10\n1 1 battery 10\n1 1 battery 10\n' | \
-  SMART_LID_BATTERY_CHECK_LOOPS=3 SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL=1 \
+echo "== recovering onto AC releases the latch and restores keep-awake =="
+out="$(printf '0 0 battery 5\n0 0 ac 5\n0 1 ac 50\n' | \
+  SMART_LID_STATE_FILE="$TMP/state-low-battery-recover" "$DAEMON" simulate)"
+assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 2 "phase=battery-recovered"
+assert_line "$out" 3 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+
+echo "== periodic battery checks are throttled between samples =="
+# The first three samples are above the cutoff; the drop to 20% is only observed
+# once the throttle interval elapses.
+out="$(printf '0 0 battery 30\n0 1 battery 30\n1 1 battery 30\n1 1 battery 20\n1 1 battery 20\n' | \
+  SMART_LID_BATTERY_CHECK_LOOPS=4 SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL=1 \
   SMART_LID_STATE_FILE="$TMP/state-low-battery-throttle" "$DAEMON" simulate)"
 assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 assert_line "$out" 3 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 assert_line "$out" 4 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
-assert_line "$out" 5 "phase=closed-low-battery-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 5 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
 
 echo "== three consecutive battery read failures fail safe and success resets the streak =="
 out="$(printf '0 0 battery 50\n0 1 invalid 0\n1 1 invalid 0\n1 1 battery 50\n1 1 invalid 0\n1 1 invalid 0\n1 1 invalid 0\n' | \
@@ -90,7 +108,52 @@ assert_line "$out" 3 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 assert_line "$out" 4 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 assert_line "$out" 5 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 assert_line "$out" 6 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
-assert_line "$out" 7 "phase=closed-battery-unavailable-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 7 "phase=battery-unavailable-sleep disablesleep=0 sleepnow=1"
+
+echo "== caffeinate assertions are released when the cutoff fires =="
+fake_pgrep="$TMP/fake-pgrep"; fake_kill="$TMP/fake-kill"; kill_log="$TMP/kill.log"
+printf '#!/bin/bash\nprintf "4242\\n4243\\n"\n' > "$fake_pgrep"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$FAKE_KILL_LOG"\nexit 0\n' > "$fake_kill"
+chmod +x "$fake_pgrep" "$fake_kill"
+: > "$kill_log"
+out="$(printf '0 0 battery 5\n' | FAKE_KILL_LOG="$kill_log" \
+  SMART_LID_PGREP="$fake_pgrep" SMART_LID_KILL="$fake_kill" \
+  SMART_LID_STATE_FILE="$TMP/state-caffeinate" "$DAEMON" simulate)"
+assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+grep -q -- "-TERM 4242" "$kill_log" || fail "should TERM each caffeinate pid, got: $(cat "$kill_log")"
+grep -q -- "-TERM 4243" "$kill_log" || fail "should TERM every caffeinate pid, got: $(cat "$kill_log")"
+if grep -q -- "-TERM -" "$kill_log"; then
+  fail "must never signal a process group; that would kill the wrapped agent session"
+fi
+
+echo "== caffeinate release can be disabled =="
+: > "$kill_log"
+out="$(printf '0 0 battery 5\n' | FAKE_KILL_LOG="$kill_log" \
+  SMART_LID_PGREP="$fake_pgrep" SMART_LID_KILL="$fake_kill" SMART_LID_RELEASE_CAFFEINATE=0 \
+  SMART_LID_STATE_FILE="$TMP/state-caffeinate-off" "$DAEMON" simulate)"
+[ ! -s "$kill_log" ] || fail "release should be suppressed when SMART_LID_RELEASE_CAFFEINATE=0"
+
+echo "== real caffeinate: signalling it drops the assertion, wrapped command survives =="
+# The safety of the release depends on this direction: caffeinate re-execs as a
+# CHILD of the command it wraps.
+if command -v caffeinate >/dev/null 2>&1; then
+  printf '#!/bin/bash\nfor i in $(seq 1 40); do sleep 0.25; done\n' > "$TMP/wrapped.sh"
+  chmod +x "$TMP/wrapped.sh"
+  caffeinate -i "$TMP/wrapped.sh" &
+  wrapped=$!
+  sleep 1
+  caff="$(pgrep -P "$wrapped" 2>/dev/null | head -1)"
+  [ -n "$caff" ] || fail "expected caffeinate to run as a child of the wrapped command"
+  before="$(pmset -g assertions 2>/dev/null | grep -c 'caffeinate command-line tool' || true)"
+  kill -TERM "$caff" 2>/dev/null || true
+  sleep 1.5
+  after="$(pmset -g assertions 2>/dev/null | grep -c 'caffeinate command-line tool' || true)"
+  kill -0 "$wrapped" 2>/dev/null || fail "wrapped command died when its caffeinate was signalled"
+  [ "$after" -lt "$before" ] || fail "assertion count did not drop ($before -> $after)"
+  kill -9 "$wrapped" 2>/dev/null || true
+else
+  echo "   (skipped: caffeinate unavailable)"
+fi
 
 echo "== invalid battery interval settings fail clearly on macOS Bash =="
 if SMART_LID_BATTERY_CHECK_LOOPS=08 "$DAEMON" status >/dev/null 2>&1; then
@@ -114,17 +177,30 @@ printf 'phase=closed-keep-awake\nprev_locked=1\nprev_closed=1\ndesired=1\n' > "$
 out="$(printf '1 1\n' | SMART_LID_STATE_FILE="$state" SMART_LID_SIMULATION_KEEP_STATE=1 "$DAEMON" simulate)"
 assert_line "$out" 1 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 
-echo "== daemon restart preserves closed-lid battery safety states =="
+echo "== daemon restart preserves a battery safety state while the battery is still low =="
 state="$TMP/state-low-battery-restart"
-printf 'phase=closed-low-battery-sleep\nprev_locked=1\nprev_closed=1\ndesired=0\n' > "$state"
-out="$(printf '0 1 battery 80\n' | SMART_LID_STATE_FILE="$state" \
+printf 'phase=low-battery-sleep\nprev_locked=1\nprev_closed=1\ndesired=0\n' > "$state"
+out="$(printf '0 1 battery 5\n' | SMART_LID_STATE_FILE="$state" \
   SMART_LID_SIMULATION_KEEP_STATE=1 "$DAEMON" simulate)"
-assert_line "$out" 1 "phase=closed-low-battery-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
 state="$TMP/state-battery-unavailable-restart"
-printf 'phase=closed-battery-unavailable-sleep\nprev_locked=1\nprev_closed=1\ndesired=0\n' > "$state"
-out="$(printf '0 1 battery 80\n' | SMART_LID_STATE_FILE="$state" \
+printf 'phase=battery-unavailable-sleep\nprev_locked=1\nprev_closed=1\ndesired=0\n' > "$state"
+out="$(printf '0 1 battery 5\n' | SMART_LID_STATE_FILE="$state" \
   SMART_LID_SIMULATION_KEEP_STATE=1 "$DAEMON" simulate)"
-assert_line "$out" 1 "phase=closed-battery-unavailable-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+
+echo "== a restored safety state is released once the battery has recovered =="
+# Latching must not outlive the condition: a daemon restart at 80% should hand
+# control back rather than leaving the Mac permanently sleep-enabled.
+state="$TMP/state-low-battery-restart-recovered"
+printf 'phase=low-battery-sleep\nprev_locked=1\nprev_closed=1\ndesired=0\n' > "$state"
+out="$(printf '0 1 battery 80\n0 1 battery 80\n' | SMART_LID_STATE_FILE="$state" \
+  SMART_LID_SIMULATION_KEEP_STATE=1 "$DAEMON" simulate)"
+# Releasing the latch clears the saved sensor history, so the next poll (~0.1s
+# later) re-derives the lid phase. Sleep stays permitted in between, which is the
+# safe direction to err in.
+assert_line "$out" 1 "phase=battery-recovered disablesleep=0 sleepnow=0"
+assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 
 echo "== fake pmset proves applied power actions and retries a transient failure =="
 fake_pmset="$TMP/fake-pmset"
@@ -212,14 +288,13 @@ grep -q 'sleepnow' "$TMP/pmset-log-low-battery" \
 
 printf '1\n' > "$TMP/pmset-state-low-battery-retry"
 : > "$TMP/pmset-log-low-battery-retry"
-retry_out="$(printf '0 0 battery 11\n0 1 battery 10\n1 1 battery 10\n' | \
+retry_out="$(printf '0 1 battery 10\n1 1 battery 10\n' | \
   SMART_LID_PMSET="$fake_pmset" FAKE_PMSET_STATE="$TMP/pmset-state-low-battery-retry" \
   FAKE_PMSET_LOG="$TMP/pmset-log-low-battery-retry" FAKE_PMSET_SLEEP_FAIL_ONCE=1 \
-  SMART_LID_BATTERY_CHECK_LOOPS=600 SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL=1 \
   SMART_LID_STATE_FILE="$TMP/state-apply-low-battery-retry" \
   SMART_LID_SIMULATION_APPLY=1 "$DAEMON" simulate 2>/dev/null)"
-assert_line "$retry_out" 2 "phase=closed-low-battery-sleep disablesleep=0 sleepnow=1"
-assert_line "$retry_out" 3 "phase=closed-low-battery-sleep disablesleep=0 sleepnow=0"
+assert_line "$retry_out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+assert_line "$retry_out" 2 "phase=low-battery-sleep disablesleep=0 sleepnow=0"
 test "$(grep -c '^sleepnow$' "$TMP/pmset-log-low-battery-retry")" -eq 2 \
   || fail "failed low-battery sleep was not retried after the automatic lock"
 
@@ -250,7 +325,7 @@ status_out="$(
   SMART_LID_STATE_FILE="$TMP/state-status" "$DAEMON" status
 )"
 case "$status_out" in
-  *"PowerSource=battery BatteryPercent=10 LowBatteryCutoff=10"*) ;;
+  *"PowerSource=battery BatteryPercent=10 LowBatteryCutoff=20"*) ;;
   *) fail "status did not parse the pmset battery response: $status_out" ;;
 esac
 
@@ -316,7 +391,7 @@ grep -q -- '-a disablesleep 0' "$TMP/pmset-log-daemon-battery-unavailable" \
   || fail "persistent battery telemetry failure did not restore disablesleep=0"
 grep -q '^sleepnow$' "$TMP/pmset-log-daemon-battery-unavailable" \
   || fail "persistent battery telemetry failure did not request sleep"
-grep -q '^phase=closed-battery-unavailable-sleep$' "$TMP/state-daemon-battery-unavailable" \
+grep -q '^phase=battery-unavailable-sleep$' "$TMP/state-daemon-battery-unavailable" \
   || fail "persistent battery telemetry failure did not enter its fail-safe phase"
 
 echo "== TERM stops the daemon and restores normal sleep =="
