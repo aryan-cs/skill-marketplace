@@ -14,7 +14,21 @@ RECONCILE_LOOPS="${SMART_LID_RECONCILE_LOOPS:-50}"
 BATTERY_CHECK_LOOPS="${SMART_LID_BATTERY_CHECK_LOOPS:-600}"
 BATTERY_RETRY_LOOPS="${SMART_LID_BATTERY_RETRY_LOOPS:-50}"
 BATTERY_FAILURE_LIMIT="${SMART_LID_BATTERY_FAILURE_LIMIT:-3}"
-LOW_BATTERY_PERCENT=10
+LOW_BATTERY_PERCENT="${SMART_LID_LOW_BATTERY_PERCENT:-20}"
+# `caffeinate CMD` runs CMD as its PARENT and re-execs itself as a child, so
+# signalling the caffeinate PID drops its sleep assertion while the wrapped
+# command keeps running. Never signal the parent or a process group: that would
+# kill the agent session this guard exists to protect.
+RELEASE_CAFFEINATE="${SMART_LID_RELEASE_CAFFEINATE:-1}"
+PGREP="${SMART_LID_PGREP:-/usr/bin/pgrep}"
+KILL_BIN="${SMART_LID_KILL:-/bin/kill}"
+CAFFEINATE="${SMART_LID_CAFFEINATE:-/usr/bin/caffeinate}"
+PS_BIN="${SMART_LID_PS:-/bin/ps}"
+# PIDs of the sessions whose caffeinate holds were released at the cutoff, so the
+# holds can be restored once power returns. Recorded as the PARENT of each
+# caffeinate (the wrapped command), because that is the process that outlives the
+# release and that a restored assertion must be tied to.
+released_caffeinate_targets=""
 STATE_FILE="${SMART_LID_STATE_FILE:-/var/run/com.aryangupta.smart-lid.state}"
 LABEL="com.aryangupta.smart-lid"
 
@@ -47,6 +61,9 @@ validate_positive_integer() {
 validate_positive_integer SMART_LID_BATTERY_CHECK_LOOPS "$BATTERY_CHECK_LOOPS"
 validate_positive_integer SMART_LID_BATTERY_RETRY_LOOPS "$BATTERY_RETRY_LOOPS"
 validate_positive_integer SMART_LID_BATTERY_FAILURE_LIMIT "$BATTERY_FAILURE_LIMIT"
+validate_positive_integer SMART_LID_LOW_BATTERY_PERCENT "$LOW_BATTERY_PERCENT"
+[ "$LOW_BATTERY_PERCENT" -le 100 ] \
+  || { echo "SMART_LID_LOW_BATTERY_PERCENT must be between 1 and 100" >&2; exit 64; }
 
 log() {
   local message="$*"
@@ -152,11 +169,11 @@ load_state_for_closed_restart() {
       phase="$saved_phase"
       desired=1
       ;;
-    closed-low-battery-sleep|closed-battery-unavailable-sleep)
+    low-battery-sleep|battery-unavailable-sleep)
       phase="$saved_phase"
       desired=0
       request_sleep=1
-      sleep_reason="restoring saved closed-lid battery safety state"
+      sleep_reason="restoring saved battery safety state"
       ;;
     *)
       return 1
@@ -222,12 +239,11 @@ transition_state() {
     else
       phase="unlocked-open"; desired=1; request_sleep=0; sleep_reason=""
     fi
-  elif [ "$closed" = 1 ] && {
-    [ "$phase" = "closed-low-battery-sleep" ] \
-      || [ "$phase" = "closed-battery-unavailable-sleep" ]
-  }; then
-    # Keep battery safety states latched while closed. In particular, the
+  elif [ "$phase" = "low-battery-sleep" ] || [ "$phase" = "battery-unavailable-sleep" ]; then
+    # Keep battery safety states latched in any lid position. In particular, the
     # automatic lock must not cancel a pending retry if `pmset sleepnow` failed.
+    # enforce_low_battery_sleep() re-evaluates each cycle and releases the latch
+    # once the machine is back on AC or above the cutoff.
     desired=0
   elif [ "$prev_locked" = 0 ] && [ "$locked" = 1 ]; then
     if [ "$closed" = 1 ] && [ "$phase" = "closed-keep-awake" ]; then
@@ -254,17 +270,89 @@ transition_state() {
   prev_closed="$closed"
 }
 
+# Drop caffeinate sleep assertions by signalling the caffeinate PIDs only, so the
+# commands they wrap keep running and merely stop preventing sleep.
+release_caffeinate_assertions() {
+  [ "$RELEASE_CAFFEINATE" = 1 ] || return 0
+  [ -x "$PGREP" ] || return 0
+  local pids pid parent released=0
+  pids="$("$PGREP" -x caffeinate 2>/dev/null)" || return 0
+  [ -n "$pids" ] || return 0
+  for pid in $pids; do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ "$pid" -gt 1 ] || continue
+    # Record the wrapped command (caffeinate's parent) before signalling, so the
+    # hold can be restored later with `caffeinate -w`.
+    parent="$("$PS_BIN" -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    if "$KILL_BIN" -TERM "$pid" 2>/dev/null; then
+      released=$((released + 1))
+      case "$parent" in
+        ''|*[!0-9]*) ;;
+        *) [ "$parent" -gt 1 ] \
+             && released_caffeinate_targets="${released_caffeinate_targets}${released_caffeinate_targets:+ }$parent" ;;
+      esac
+    fi
+  done
+  [ "$released" -gt 0 ] || return 0
+  log "released $released caffeinate sleep assertion(s); wrapped commands keep running"
+}
+
+# Restore the holds released at the cutoff, once the battery has recovered. Each
+# is re-created with `caffeinate -w PID`, which asserts on behalf of the wrapped
+# command and exits by itself when that command does -- so a session that ended
+# in the meantime is skipped rather than leaking an assertion forever.
+restore_caffeinate_assertions() {
+  [ -n "$released_caffeinate_targets" ] || return 0
+  local pid restored=0
+  if [ "$RELEASE_CAFFEINATE" != 1 ] || [ ! -x "$CAFFEINATE" ]; then
+    released_caffeinate_targets=""
+    return 0
+  fi
+  for pid in $released_caffeinate_targets; do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    # Only re-arm sessions that are still alive.
+    "$KILL_BIN" -0 "$pid" 2>/dev/null || continue
+    # Detached on purpose: caffeinate -w blocks until the target exits.
+    "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
+    restored=$((restored + 1))
+  done
+  released_caffeinate_targets=""
+  [ "$restored" -gt 0 ] || return 0
+  log "restored $restored caffeinate sleep assertion(s) for still-running sessions"
+}
+
 enforce_low_battery_sleep() {
   local battery_status power_source battery_percent
-  if [ "$prev_closed" != 1 ]; then
-    # Make the first closed-lid sample check immediately.
+  # The guard runs in every lid state. A long agent run on battery usually has
+  # the lid OPEN, and `unlocked-open` sets desired=1, so skipping the open case
+  # left the machine pinned awake by disablesleep all the way down to 0%.
+  local latched=0
+  case "$phase" in
+    low-battery-sleep|battery-unavailable-sleep) latched=1 ;;
+  esac
+
+  # A latched safety state holds desired=0, so it must still be evaluated each
+  # cycle -- otherwise the latch could never be released once power returns.
+  if [ "$desired" != 1 ] && [ "$latched" != 1 ]; then
+    # Sleep is already permitted, so there is nothing to override. Reset the
+    # cadence so the next keep-awake period samples the battery immediately.
     battery_check_count="$BATTERY_CHECK_LOOPS"
     battery_check_target="$BATTERY_CHECK_LOOPS"
     battery_read_failures=0
     return 0
   fi
 
-  if [ "$simulation_mode" != 1 ] || [ "${SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL:-0}" = 1 ]; then
+  # A simulation line that omits the power-source/percent columns is exercising
+  # lid ordering only, not the battery guard. Treat it as "no sample offered"
+  # rather than as an unreadable battery, which would trip the failure path.
+  if [ "$simulation_mode" = 1 ] && [ -z "$simulation_power_source" ]; then
+    return 0
+  fi
+
+  # While latched, sample every cycle: the throttle exists to avoid polling the
+  # battery during normal keep-awake, not to delay releasing a safety state.
+  if [ "$latched" != 1 ] \
+    && { [ "$simulation_mode" != 1 ] || [ "${SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL:-0}" = 1 ]; }; then
     battery_check_count=$((battery_check_count + 1))
     [ "$battery_check_count" -ge "$battery_check_target" ] || return 0
   fi
@@ -276,8 +364,8 @@ enforce_low_battery_sleep() {
     battery_check_target="$BATTERY_RETRY_LOOPS"
     battery_read_failures=$((battery_read_failures + 1))
     if [ "$battery_read_failures" -ge "$BATTERY_FAILURE_LIMIT" ]; then
-      if [ "$phase" != "closed-battery-unavailable-sleep" ]; then
-        phase="closed-battery-unavailable-sleep"
+      if [ "$phase" != "battery-unavailable-sleep" ]; then
+        phase="battery-unavailable-sleep"
         request_sleep=1
         sleep_reason="battery status unavailable for ${battery_read_failures} consecutive checks"
         log "$sleep_reason; restoring normal sleep"
@@ -291,14 +379,31 @@ enforce_low_battery_sleep() {
   battery_read_failures=0
   power_source="${battery_status%% *}"
   battery_percent="${battery_status#* }"
-  [ "$power_source" = "battery" ] || return 0
-  [ "$battery_percent" -le "$LOW_BATTERY_PERCENT" ] || return 0
 
-  if [ "$phase" != "closed-low-battery-sleep" ]; then
-    phase="closed-low-battery-sleep"
+  # Back on AC, or recovered above the cutoff: release a latched safety state so
+  # normal lid behaviour resumes without needing another lid event.
+  if [ "$power_source" != "battery" ] || [ "$battery_percent" -gt "$LOW_BATTERY_PERCENT" ]; then
+    if [ "$phase" = "low-battery-sleep" ] || [ "$phase" = "battery-unavailable-sleep" ]; then
+      log "battery recovered (${power_source}, ${battery_percent}%); resuming normal lid behavior"
+      phase="battery-recovered"
+      request_sleep=0
+      sleep_reason=""
+      prev_locked=""
+      prev_closed=""
+      restore_caffeinate_assertions
+    fi
+    return 0
+  fi
+
+  if [ "$phase" != "low-battery-sleep" ]; then
+    phase="low-battery-sleep"
     request_sleep=1
-    sleep_reason="closed lid at ${battery_percent}% battery (cutoff ${LOW_BATTERY_PERCENT}%)"
+    sleep_reason="${battery_percent}% battery on battery power (cutoff ${LOW_BATTERY_PERCENT}%)"
     log "$sleep_reason; restoring normal sleep"
+    # Clearing disablesleep is not sufficient on its own: the claude()/codex()/
+    # awake() wrappers this skill installs run under `caffeinate -dimsu`, and -i
+    # holds a PreventUserIdleSystemSleep assertion that pmset does not override.
+    release_caffeinate_assertions
   fi
   desired=0
 }
