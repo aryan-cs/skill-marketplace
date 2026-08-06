@@ -22,6 +22,13 @@ LOW_BATTERY_PERCENT="${SMART_LID_LOW_BATTERY_PERCENT:-20}"
 RELEASE_CAFFEINATE="${SMART_LID_RELEASE_CAFFEINATE:-1}"
 PGREP="${SMART_LID_PGREP:-/usr/bin/pgrep}"
 KILL_BIN="${SMART_LID_KILL:-/bin/kill}"
+CAFFEINATE="${SMART_LID_CAFFEINATE:-/usr/bin/caffeinate}"
+PS_BIN="${SMART_LID_PS:-/bin/ps}"
+# PIDs of the sessions whose caffeinate holds were released at the cutoff, so the
+# holds can be restored once power returns. Recorded as the PARENT of each
+# caffeinate (the wrapped command), because that is the process that outlives the
+# release and that a restored assertion must be tied to.
+released_caffeinate_targets=""
 STATE_FILE="${SMART_LID_STATE_FILE:-/var/run/com.aryangupta.smart-lid.state}"
 LABEL="com.aryangupta.smart-lid"
 
@@ -268,16 +275,50 @@ transition_state() {
 release_caffeinate_assertions() {
   [ "$RELEASE_CAFFEINATE" = 1 ] || return 0
   [ -x "$PGREP" ] || return 0
-  local pids pid released=0
+  local pids pid parent released=0
   pids="$("$PGREP" -x caffeinate 2>/dev/null)" || return 0
   [ -n "$pids" ] || return 0
   for pid in $pids; do
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     [ "$pid" -gt 1 ] || continue
-    "$KILL_BIN" -TERM "$pid" 2>/dev/null && released=$((released + 1))
+    # Record the wrapped command (caffeinate's parent) before signalling, so the
+    # hold can be restored later with `caffeinate -w`.
+    parent="$("$PS_BIN" -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    if "$KILL_BIN" -TERM "$pid" 2>/dev/null; then
+      released=$((released + 1))
+      case "$parent" in
+        ''|*[!0-9]*) ;;
+        *) [ "$parent" -gt 1 ] \
+             && released_caffeinate_targets="${released_caffeinate_targets}${released_caffeinate_targets:+ }$parent" ;;
+      esac
+    fi
   done
   [ "$released" -gt 0 ] || return 0
   log "released $released caffeinate sleep assertion(s); wrapped commands keep running"
+}
+
+# Restore the holds released at the cutoff, once the battery has recovered. Each
+# is re-created with `caffeinate -w PID`, which asserts on behalf of the wrapped
+# command and exits by itself when that command does -- so a session that ended
+# in the meantime is skipped rather than leaking an assertion forever.
+restore_caffeinate_assertions() {
+  [ -n "$released_caffeinate_targets" ] || return 0
+  local pid restored=0
+  if [ "$RELEASE_CAFFEINATE" != 1 ] || [ ! -x "$CAFFEINATE" ]; then
+    released_caffeinate_targets=""
+    return 0
+  fi
+  for pid in $released_caffeinate_targets; do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    # Only re-arm sessions that are still alive.
+    "$KILL_BIN" -0 "$pid" 2>/dev/null || continue
+    # Detached on purpose: caffeinate -w blocks until the target exits.
+    "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
+    restored=$((restored + 1))
+  done
+  released_caffeinate_targets=""
+  [ "$restored" -gt 0 ] || return 0
+  log "restored $restored caffeinate sleep assertion(s) for still-running sessions"
 }
 
 enforce_low_battery_sleep() {
@@ -349,6 +390,7 @@ enforce_low_battery_sleep() {
       sleep_reason=""
       prev_locked=""
       prev_closed=""
+      restore_caffeinate_assertions
     fi
     return 0
   fi

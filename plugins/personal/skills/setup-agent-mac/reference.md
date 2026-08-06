@@ -218,7 +218,11 @@ individually and never a process group, since signalling the group would take th
 `SMART_LID_RELEASE_CAFFEINATE=0` to disable this.
 
 Once the Mac is back on AC or above the cutoff, the safety state is released and normal lid behavior resumes
-without needing another lid event. `lidawake status` reports the current power source, percentage, and cutoff
+without needing another lid event. The released `caffeinate` holds are **re-armed** at that point, so a session
+that survived the cutoff goes back to preventing idle sleep rather than being left unprotected for the rest of
+its life. Each is restored with `caffeinate -dimsu -w PID`, which asserts on behalf of the wrapped command and
+exits by itself when that command does — so a session that ended in the meantime is skipped rather than leaking
+an assertion, and the restored hold clears itself when the session finishes. `lidawake status` reports the current power source, percentage, and cutoff
 alongside the lock, lid, and `SleepDisabled` state. A failed battery read retries after about five seconds rather
 than waiting a minute; after three consecutive failures the daemon enters `battery-unavailable-sleep` and
 conservatively restores normal sleep, because it can no longer enforce the cutoff reliably.

@@ -64,9 +64,10 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
      open arms normal sleep, so closing it afterward sleeps immediately. If a keep-awake session runs on
      battery and reaches 20% — **lid open or closed** — the daemon restores normal sleep, releases the
      `caffeinate` assertions held by the `claude`/`codex`/`awake` wrappers (the wrapped sessions keep
-     running), and requests sleep immediately. AC power never triggers the cutoff at any charge. If battery
-     status cannot be read three consecutive times, it conservatively restores sleep rather than running
-     without a working guard.
+     running), and requests sleep immediately. Once charging resumes or the battery recovers above the
+     cutoff, those holds are re-armed so the surviving sessions prevent idle sleep again. AC power never
+     triggers the cutoff at any charge. If battery status cannot be read three consecutive times, it
+     conservatively restores sleep rather than running without a working guard.
      Inspect the lid, power source, percentage, and cutoff with `lidawake status`, and fully revert with
      `lidawake smart-off`. The one-time install prompts for sudo because the state watcher must run as a root
      LaunchDaemon and change `pmset` safely.
