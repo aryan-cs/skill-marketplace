@@ -607,6 +607,98 @@ test "$(cat "$TMP/pmset-state-lifecycle")" = 0 \
 env "${lifecycle_env[@]}" "$INSTALLER" uninstall >/dev/null
 test "$(cat "$TMP/pmset-state-lifecycle")" = 0 || fail "uninstall did not restore disablesleep=0"
 
+echo "== upgrading over a running service tolerates launchd's asynchronous bootout =="
+# The lifecycle fake unloads synchronously inside `bootout`, so the upgrade path was never
+# exercised against how launchd actually behaves: bootout returns *before* teardown
+# completes. Checking `service_loaded` once, immediately, therefore reported a bogus
+# "Could not unload the existing smart-lid service." on every upgrade over a live daemon.
+fake_launchctl_async="$TMP/fake-launchctl-async"
+cat > "$fake_launchctl_async" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${FAKE_LAUNCHCTL_LOG:?}"
+service_state="${FAKE_LAUNCHCTL_STATE:?}"
+pending="$service_state.pending"
+counter="$service_state.counter"
+case "${1:-}" in
+  print)
+    # Teardown lands only after FAKE_LAUNCHCTL_BOOTOUT_DELAY further observations.
+    if [ -e "$pending" ]; then
+      n=$(( $(cat "$counter" 2>/dev/null || printf 0) + 1 ))
+      printf '%s\n' "$n" > "$counter"
+      if [ "$n" -ge "${FAKE_LAUNCHCTL_BOOTOUT_DELAY:-2}" ]; then
+        rm -f "$service_state" "$pending" "$counter"
+      fi
+    fi
+    [ -e "$service_state" ] || exit 113
+    printf 'state = running\n'
+    ;;
+  bootout)
+    [ -e "$service_state" ] || exit 3
+    : > "$pending"
+    ;;
+  bootstrap)
+    rm -f "$pending" "$counter"
+    : > "$service_state"
+    ;;
+  kickstart) ;;
+  *) exit 64 ;;
+esac
+SH
+chmod +x "$fake_launchctl_async"
+async_root="$TMP/async-root"
+: > "$TMP/launchctl-log-async"
+printf '1\n' > "$TMP/pmset-state-async"
+: > "$TMP/pmset-log-async"
+async_env=(
+  SMART_LID_TEST_ROOT="$async_root"
+  SMART_LID_TEST_LIFECYCLE=1
+  SMART_LID_LAUNCHCTL="$fake_launchctl_async"
+  SMART_LID_PMSET="$fake_pmset"
+  SMART_LID_IOREG="$fake_ioreg"
+  SMART_LID_SLEEP=/usr/bin/true
+  SMART_LID_INSTALL_VERIFY_DELAY=0
+  FAKE_LAUNCHCTL_LOG="$TMP/launchctl-log-async"
+  FAKE_LAUNCHCTL_STATE="$TMP/launchctl-state-async"
+  FAKE_PMSET_STATE="$TMP/pmset-state-async"
+  FAKE_PMSET_LOG="$TMP/pmset-log-async"
+)
+env "${async_env[@]}" "$INSTALLER" install >/dev/null
+# The second install runs over a service that is already loaded: the upgrade path.
+if ! env "${async_env[@]}" "$INSTALLER" install >/dev/null 2>"$TMP/upgrade-err"; then
+  fail "upgrade over a running service failed: $(cat "$TMP/upgrade-err")"
+fi
+if grep -q 'Could not unload' "$TMP/upgrade-err"; then
+  fail "installer reported a bogus unload failure on a healthy upgrade"
+fi
+if ls "$async_root/usr/local/libexec/"*.new.* >/dev/null 2>&1; then
+  fail "upgrade left .new temp files behind"
+fi
+if ls "$async_root/usr/local/libexec/"*.backup.* >/dev/null 2>&1; then
+  fail "upgrade left .backup temp files behind"
+fi
+
+echo "== a failed unload rolls back cleanly instead of aborting on an unset variable =="
+# rollback_install() runs from the EXIT trap, which fires only after install_daemon() has
+# already returned. While its bookkeeping lived in function-locals those names were out of
+# scope by then, so `set -u` killed the trap on its first reference: the rollback never ran
+# and the transaction's temp files were orphaned in /usr/local/libexec.
+if env "${async_env[@]}" FAKE_LAUNCHCTL_BOOTOUT_DELAY=9999 "$INSTALLER" install \
+     >/dev/null 2>"$TMP/stuck-err"; then
+  fail "installer unexpectedly succeeded when the service never unloaded"
+fi
+if grep -q 'unbound variable' "$TMP/stuck-err"; then
+  fail "rollback aborted on an unset variable instead of rolling back"
+fi
+grep -q 'Could not unload' "$TMP/stuck-err" || fail "installer did not report the unload failure"
+test -x "$async_root/usr/local/libexec/com.aryangupta.smart-lid" \
+  || fail "rollback did not restore the previously installed daemon"
+if ls "$async_root/usr/local/libexec/"*.new.* >/dev/null 2>&1; then
+  fail "rollback left .new temp files behind"
+fi
+if ls "$async_root/Library/LaunchDaemons/"*.backup.* >/dev/null 2>&1; then
+  fail "rollback left .backup temp files behind"
+fi
+
 echo "== uninstall refuses to delete files if launchctl cannot unload =="
 env "${lifecycle_env[@]}" "$INSTALLER" install >/dev/null
 if env "${lifecycle_env[@]}" FAKE_LAUNCHCTL_FAIL_BOOTOUT=1 "$INSTALLER" uninstall >/dev/null 2>&1; then
