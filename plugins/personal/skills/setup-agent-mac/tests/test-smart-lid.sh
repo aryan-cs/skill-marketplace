@@ -117,6 +117,7 @@ printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$FAKE_KILL_LOG"\nexit 0\n' > "$fak
 chmod +x "$fake_pgrep" "$fake_kill"
 : > "$kill_log"
 out="$(printf '0 0 battery 5\n' | FAKE_KILL_LOG="$kill_log" \
+  SMART_LID_RELEASE_CAFFEINATE=1 \
   SMART_LID_PGREP="$fake_pgrep" SMART_LID_KILL="$fake_kill" \
   SMART_LID_STATE_FILE="$TMP/state-caffeinate" "$DAEMON" simulate)"
 assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
@@ -125,6 +126,19 @@ grep -q -- "-TERM 4243" "$kill_log" || fail "should TERM every caffeinate pid, g
 if grep -q -- "-TERM -" "$kill_log"; then
   fail "must never signal a process group; that would kill the wrapped agent session"
 fi
+
+echo "== a bare simulate does not signal real caffeinate processes =="
+# `simulate` is a debug path and must not touch the host machine. Without this gate, a
+# plain `./smart-lid-daemon.sh simulate` fed one below-cutoff sample TERMed every
+# caffeinate on the Mac running it, silently dropping the keep-awake holds of unrelated
+# agent sessions -- observed while verifying an install. The simulated *policy* must still
+# be reported in full; only the real-world side effect is suppressed.
+: > "$kill_log"
+out="$(printf '0 0 battery 5\n' | FAKE_KILL_LOG="$kill_log" \
+  SMART_LID_PGREP="$fake_pgrep" SMART_LID_KILL="$fake_kill" \
+  SMART_LID_STATE_FILE="$TMP/state-caffeinate-bare" "$DAEMON" simulate)"
+assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+[ ! -s "$kill_log" ] || fail "a bare simulate must not signal anything, got: $(cat "$kill_log")"
 
 echo "== recovering above the cutoff re-arms the released caffeinate holds =="
 fake_caffeinate="$TMP/fake-caffeinate"; caff_log="$TMP/caffeinate.log"
@@ -137,6 +151,7 @@ chmod +x "$fake_caffeinate" "$fake_ps"
 # Drop to 5% (release), then return to AC (restore). `kill -0` liveness probes go
 # through the same stub, which exits 0, so both recorded pids count as alive.
 out="$(printf '0 0 battery 5\n0 0 ac 60\n' | FAKE_KILL_LOG="$kill_log" \
+  SMART_LID_RELEASE_CAFFEINATE=1 \
   FAKE_CAFFEINATE_LOG="$caff_log" SMART_LID_PGREP="$fake_pgrep" SMART_LID_KILL="$fake_kill" \
   SMART_LID_CAFFEINATE="$fake_caffeinate" SMART_LID_PS="$fake_ps" \
   SMART_LID_STATE_FILE="$TMP/state-caffeinate-restore" "$DAEMON" simulate)"
@@ -151,6 +166,7 @@ restored="$(grep -c -- "-dimsu -w" "$caff_log" || true)"
 echo "== a second recovery does not re-arm holds that were never released =="
 : > "$caff_log"
 out="$(printf '0 0 ac 60\n0 0 ac 61\n' | FAKE_KILL_LOG="$kill_log" \
+  SMART_LID_RELEASE_CAFFEINATE=1 \
   FAKE_CAFFEINATE_LOG="$caff_log" SMART_LID_PGREP="$fake_pgrep" SMART_LID_KILL="$fake_kill" \
   SMART_LID_CAFFEINATE="$fake_caffeinate" SMART_LID_PS="$fake_ps" \
   SMART_LID_STATE_FILE="$TMP/state-caffeinate-norestore" "$DAEMON" simulate)"

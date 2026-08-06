@@ -454,6 +454,13 @@ simulate() {
     rm -f "$STATE_FILE"
   fi
   simulation_mode=1
+  # Releasing caffeinate holds signals REAL processes, which is a side effect on the host
+  # machine and not a simulated one. A plain `./smart-lid-daemon.sh simulate` fed a
+  # below-cutoff sample would otherwise drop every keep-awake hold on the Mac running it --
+  # observed happening while verifying an install. Default it off here and require an
+  # explicit opt-in; the tests that cover the release pass SMART_LID_RELEASE_CAFFEINATE=1
+  # along with mocked pgrep/kill.
+  RELEASE_CAFFEINATE="${SMART_LID_RELEASE_CAFFEINATE:-0}"
   while read -r locked closed power_source battery_percent _; do
     [ -n "${locked:-}" ] || continue
     simulation_power_source="${power_source:-}"
