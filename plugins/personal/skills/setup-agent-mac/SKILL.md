@@ -34,6 +34,11 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
      when npm is absent — and writes the `agent-yes` block: a `claude()` wrapper that routes through `ay`,
      defaults each launch to **full ultracode** (`--effort ultracode`) and **auto mode**
      (`--permission-mode auto`), and holds a `caffeinate` assertion so runs never idle-sleep;
+   - writes `~/.agent-yes.config.yaml` so the permission prompts that still surface are answered
+     with **option 2, "Yes, and don't ask again for X"**, instead of option 1's one-shot yes. Without
+     it, agent-yes only ever presses Enter, so the same domain or command is asked again on the very
+     next tool call. Scoped to permission dialogs only — an AskUserQuestion menu is still left for the
+     user. A config file that this skill did not write is never overwritten;
    - stages the smart-lid daemon/installer and the crash-dialog helper under
      `~/.local/share/setup-agent-mac`, then writes a `keep-awake` block: `awake` (run any command with
      no idle sleep), a `caffeinate`-wrapped `codex`, legacy global `lidawake on|off`, and the

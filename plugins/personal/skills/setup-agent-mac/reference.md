@@ -170,6 +170,76 @@ with `bun install -g agent-yes` into `~/.bun/bin`.
 Uninstall agent-yes with `npm uninstall -g agent-yes` (or `bun remove -g agent-yes`); remove Bun
 with `rm -rf ~/.bun` and delete the `bun runtime` block.
 
+### Answering with "don't ask again" instead of a one-shot yes
+
+Out of the box agent-yes only ever presses **Enter**, and Enter takes whatever the dialog cursor is
+already sitting on — option 1. On a Claude Code permission dialog that is the one-shot answer:
+
+```
+ Permission rule WebFetch requires confirmation for this tool.
+ Do you want to allow Claude to fetch this content?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for arxiv.org
+   3. No, and tell Claude what to do differently (esc)
+```
+
+So the next tool call asks again. One real 9-day session prompted for `arxiv.org` **45 times** before
+that project's `settings.local.json` finally gained a `WebFetch(domain:arxiv.org)` rule — a rule only
+option 2 writes, and only a human ever pressed it. That is the whole bug: unattended runs were
+answering "just this once", forever.
+
+A second, narrower failure sits underneath. agent-yes looks at the screen only when a chunk of
+terminal output arrives, and there is no timer that looks again — measured: with the dialog scrolled
+off the rendered screen by a repaint delivered in the same write, 35 seconds of silence produced no
+keystroke at all. A CLI waiting on a human emits no further output, so nothing ever re-triggers it.
+This is rarer than it sounds, because it needs the dialog to be *absent* from the rendered screen at
+that moment: the ordinary case, where the dialog is the last thing painted, still matches inside a
+single 14 KB coalesced write (measured at 10 ms). Worth knowing, but it is not the everyday symptom.
+
+`setup.sh` therefore writes `~/.agent-yes.config.yaml`:
+
+```yaml
+clis:
+  claude:
+    enterExclude:
+      - pattern: "^\\s*2\\. Yes,[\\s\\S]{0,400}^\\s*3\\. No, and tell Claude what to do differently"
+        flags: m
+    typingRespond:
+      "2\n":
+        - pattern: "^\\s*2\\. Yes,[\\s\\S]{0,400}^\\s*3\\. No, and tell Claude what to do differently"
+          flags: m
+```
+
+`typingRespond` types the answer directly instead of relying on cursor position, and `enterExclude`
+suppresses the stock Enter on those same screens. Both halves were measured in isolation: with
+`enterExclude` alone and no `typingRespond`, a permission dialog gets *nothing* typed while the
+trust prompt still gets its Enter — so the exclude is genuinely honored, and option 2 is deterministic
+rather than a 60 ms race that happens to be won. Taking option 2 also makes the timing failure rarer,
+because each approval is remembered and there are fewer dialogs left to miss at all.
+
+Three details are load-bearing:
+
+- **Matching the `2. Yes, …` line alone is not safe.** Option 2 is an arbitrary answer choice on an
+  AskUserQuestion menu and `No, exit` on the trust-this-folder prompt — typing "2" there would answer
+  a real question wrongly or quit. Requiring Claude Code's
+  `3. No, and tell Claude what to do differently` reject line on the same screen pins the rule to
+  permission dialogs. `[\s\S]{0,400}` absorbs an option 2 that wraps across lines (long Bash commands
+  do). Verified against the live engine: the trust prompt still auto-accepts option 1, and an
+  AskUserQuestion menu is left untouched.
+- **agent-yes merges maps key by key but replaces arrays wholesale.** Adding an `enter:` key here
+  would silently drop all ten of its defaults (trust-folder, theme picker, resume menu,
+  "Press Enter to continue"), which is why only `enterExclude` and `typingRespond` are set.
+- **Only `~/.agent-yes.config.{yaml,yml,json}` and the same file in the cwd are read**, home first and
+  cwd winning. The engine is a compiled binary with `default.config.yaml` embedded, so editing the
+  copy under `node_modules/agent-yes/` does nothing, and there is no env var pointing at a config.
+
+`tests/test-agent-yes-config.sh` proves this end to end: it boots the real `ay` in a PTY against a
+stand-in CLI that paints captured dialog bytes, and asserts the exact keystrokes that come back. A
+regex tested against a string proves nothing here — the engine matches a terminal-rendered screen.
+
+A config file this skill did not write is never overwritten; setup.sh prints the block to add and
+leaves the file alone.
+
 ## Order-aware lid behavior (macOS)
 
 Two different sleep paths matter, and they need different tools:
@@ -341,7 +411,8 @@ the exact failure mode that made `DialogType` look like it had worked.
 Edit the shell profile (`~/.zshrc` on macOS zsh) and delete the `# >>> claude-code defaults >>>`
 block (and the `# >>> agent-yes >>>` and `# >>> bun runtime >>>` blocks if you want the plain CLI
 back), then run `exec $SHELL`. To remove agent-yes entirely: `npm uninstall -g agent-yes` (or
-`bun remove -g agent-yes`). To remove Bun: `rm -rf ~/.bun`. If smart-lid mode was installed, run
+`bun remove -g agent-yes`), and delete `~/.agent-yes.config.yaml` to drop the option-2 rules.
+To remove Bun: `rm -rf ~/.bun`. If smart-lid mode was installed, run
 `lidawake smart-off` first; this unloads the LaunchDaemon, removes its two installed files, and restores
 normal sleep. If crash dialogs were suppressed, run `crashdialogs on` before removing the
 `# >>> crash-dialogs >>>` block — the `launchctl disable` it performed lives in launchd's database, not
