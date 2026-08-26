@@ -64,9 +64,12 @@ PLIST
 
 install_daemon() {
   require_root install
-  local daemon_new="${DAEMON_DEST}.new.$$" plist_new="${PLIST_DEST}.new.$$"
-  local daemon_backup="${DAEMON_DEST}.backup.$$" plist_backup="${PLIST_DEST}.backup.$$"
-  local had_daemon=0 had_plist=0 was_loaded=0 transaction_active=0 committed=0
+  # NOT `local`: rollback_install() runs from the EXIT trap, which fires after this
+  # function has already returned. Locals would be out of scope by then and `set -u`
+  # would abort the rollback on the first reference instead of restoring the service.
+  daemon_new="${DAEMON_DEST}.new.$$" plist_new="${PLIST_DEST}.new.$$"
+  daemon_backup="${DAEMON_DEST}.backup.$$" plist_backup="${PLIST_DEST}.backup.$$"
+  had_daemon=0 had_plist=0 was_loaded=0 transaction_active=0 committed=0
   mkdir -p "$(dirname "$DAEMON_DEST")" "$(dirname "$PLIST_DEST")" "$(dirname "$STATE_FILE")"
   /bin/bash -n "$SCRIPT_DIR/smart-lid-daemon.sh"
   "$INSTALL" -m 0755 "$SCRIPT_DIR/smart-lid-daemon.sh" "$daemon_new"
@@ -102,11 +105,20 @@ install_daemon() {
     trap 'exit 130' HUP INT TERM
 
     if [ "$was_loaded" = 1 ]; then
-      "$LAUNCHCTL" bootout "system/$LABEL"
-      if service_loaded; then
-        echo "Could not unload the existing smart-lid service." >&2
-        return 1
-      fi
+      # bootout tears the service down asynchronously and returns non-zero if it was
+      # already gone, so neither its exit status nor a single immediate check is a
+      # reliable signal. Poll for the service to disappear, the same way the startup
+      # verification below polls for it to appear.
+      "$LAUNCHCTL" bootout "system/$LABEL" >/dev/null 2>&1 || true
+      local unload_attempt=0
+      while service_loaded; do
+        unload_attempt=$((unload_attempt + 1))
+        if [ "$unload_attempt" -ge "$VERIFY_ATTEMPTS" ]; then
+          echo "Could not unload the existing smart-lid service." >&2
+          return 1
+        fi
+        "$SLEEP_BIN" "$VERIFY_DELAY"
+      done
     fi
     mv "$daemon_new" "$DAEMON_DEST"
     mv "$plist_new" "$PLIST_DEST"
