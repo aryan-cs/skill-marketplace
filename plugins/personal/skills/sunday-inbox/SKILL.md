@@ -60,8 +60,10 @@ Routine confirmations that say no action is needed when the activity was recogni
 - Extract the smallest concrete task that closes the loop, not a vague event named after the email subject.
 - Preserve explicit deadlines and timezone. If duration is unknown, propose a duration and label it as an estimate.
 - Check conflicts before writing. Offer alternatives when the preferred time overlaps an existing event.
-- Do not create duplicate blocks for the same message and task. Use Sunday status or search tools to verify first.
-- Automatically schedule only high-confidence tasks that include both an explicit future deadline and a duration. Keep incomplete tasks visible for review instead of inventing timing.
+- Before any Calendar write, use Sunday's host-enforced duplicate result. Reuse a matching open task or existing occurrence even when it came from a different email, thread, request, or internal key. If Sunday cannot complete that check, leave the item for review instead of creating a block. Do not assume a public Calendar-search tool exists.
+- Automatically schedule only high-confidence tasks that include both an explicit future deadline and a supported duration of at least 60 minutes. Keep shorter or incomplete tasks visible for explicit scheduling instead of inventing timing.
+- Treat creating a task and placing it on Calendar as separate user actions. A task-only request never authorizes a Calendar write, even if a model supplies a due time or duration; schedule it only when the current user separately asks to block time.
+- Automatically create an event from email only when it proves the user already has a confirmed attendance commitment lasting at least 60 minutes. Optional webinars, conferences, workshops, happy hours, recruiting events, and other announcements never belong on Calendar merely because they contain a date, place, or RSVP link. An explicit current-user request may still add a shorter event.
 
 ## Response style
 

@@ -4,6 +4,11 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-08-26
+
+### Changed
+- **`sunday-inbox` skill** — matches Sunday's durable sparse-Calendar policy: only high-confidence, explicitly timed work or confirmed personal commitments lasting at least 60 minutes may be scheduled automatically; task creation alone never authorizes Calendar time. Before any Calendar write, agents rely on Sunday's host-enforced cross-message task and occurrence identity checks, reuse existing open work, and fail closed to review when duplicate state is incomplete, conflicting, or uncertain.
+
 ## [0.11.0] - 2026-08-25
 
 ### Added
