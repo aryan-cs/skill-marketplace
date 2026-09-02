@@ -25,11 +25,12 @@ if [ -e "$dest" ] && [ "$force" -eq 0 ]; then
   exit 1
 fi
 
-mkdir -p "$dest/scripts"
+mkdir -p "$dest/scripts" "$dest/agents"
 # Named SKILL.codex.md in the repo so Claude's skill auto-discovery doesn't try
 # to load a Codex skill; Codex expects it as SKILL.md, so rename on install.
 cp "$src_dir/SKILL.codex.md" "$dest/SKILL.md"
 cp "$src_dir/scripts/claude-run.sh" "$dest/scripts/claude-run.sh"
+cp "$src_dir/agents/openai.yaml" "$dest/agents/openai.yaml"
 chmod +x "$dest/scripts/claude-run.sh"
 
 echo "Installed Codex skill 'claude' -> $dest"

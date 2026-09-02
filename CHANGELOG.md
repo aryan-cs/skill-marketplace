@@ -4,6 +4,11 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-01
+
+### Fixed
+- **Codex-side `claude` skill discoverability** — the mirror installer now installs `agents/openai.yaml` alongside `SKILL.md` and the wrapper, giving Codex the UI-facing name, description, and starter prompt it needs to present Claude in the Skills page.
+
 ## [0.12.0] - 2026-08-30
 
 ### Added

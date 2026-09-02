@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude"
+  short_description: "Consult Claude Opus at maximum reasoning"
+  default_prompt: "Use $claude to get an independent analysis from the strongest available Claude model at maximum reasoning effort."
