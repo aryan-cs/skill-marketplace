@@ -4,6 +4,11 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-01
+
+### Changed
+- **Codex-side `claude` skill icon** — the mirror now ships and installs the supplied Claude mark for both small and large Codex skill surfaces.
+
 ## [0.12.1] - 2026-09-01
 
 ### Fixed
