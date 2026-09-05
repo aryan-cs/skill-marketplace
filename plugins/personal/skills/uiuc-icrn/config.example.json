@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "origin": "<https-origin>",
+  "identity": {
+    "jupyter_username": "<netid>",
+    "microsoft_account": "<institutional-email>",
+    "identity_provider_label": "<identity-provider-label>"
+  },
+  "browser": {
+    "profile_directory": "<chrome-profile-directory>",
+    "user_data_directory": "<absolute-chrome-user-data-directory>",
+    "executable": "<absolute-chrome-executable>"
+  },
+  "workspace": {
+    "remote_root": "<absolute-remote-sandbox>"
+  },
+  "target": {
+    "workbench_service": "<service-key>",
+    "hub_server_key": "",
+    "profile": "<profile-key>",
+    "image": "<image-key>",
+    "resource": "<resource-key>",
+    "environment_label": "<visible-environment-label>",
+    "resource_label": "<visible-resource-label>",
+    "remote_python": "<absolute-remote-python>"
+  },
+  "credentials": {
+    "jupyter_token_file": "<absolute-private-token-file>"
+  },
+  "allowed_auth_domains": {
+    "identity_provider": ["<exact-identity-provider-domain>"],
+    "institution": ["<exact-institution-domain>"],
+    "microsoft": ["<exact-microsoft-domain>"],
+    "mfa": []
+  }
+}

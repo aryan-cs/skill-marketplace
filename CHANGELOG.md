@@ -4,6 +4,12 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-04
+
+### Added
+- **`uiuc-icrn` skill** — operates a privately configured UIUC/NCSA ICRN VS Code and GPU instance from browser sign-in and restart through background Jupyter terminal commands, files, persistent jobs, GPU inspection, recovery, and exact-window screenshots. It mirrors the active local project beneath a configured remote sandbox, reuses an existing directory or creates it once, keeps a task-scoped terminal alive only while useful, closes only a launcher-owned Chrome window whose ICRN flow it has proven, and restarts expired 24-hour instances as needed.
+- The public distribution is deliberately deployment-neutral: it ships an owner-only JSON configuration loader and placeholder template rather than an identity, host, permalink, home path, Chrome profile, allocation identifier, or credential. The Jupyter token remains in a separate owner-only file and is never placed in configuration, argv, URLs, logs, screenshots, or chat.
+
 ## [0.12.2] - 2026-09-01
 
 ### Changed
