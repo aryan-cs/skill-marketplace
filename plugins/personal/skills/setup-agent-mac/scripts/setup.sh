@@ -163,6 +163,74 @@ claude() {
   fi
 }'
 
+# --- 3b. teach agent-yes to answer permission dialogs with "don't ask again" -----------------
+# Stock agent-yes only ever presses Enter, and Enter takes whatever the dialog cursor is
+# already on — option 1, a one-shot "yes". Claude Code then asks again on the very next tool
+# call, so one long run can burn through dozens of identical prompts for the same domain.
+# This config makes it type "2" instead: the "Yes, and don't ask again for X" answer.
+#
+# Not a shell block, so upsert_block can't do it: agent-yes reads ~/.agent-yes.config.yaml.
+# Ownership is tracked with the same ">>> name <<<" marker convention, and a file we did not
+# write is never clobbered — the user is told what to add instead.
+AGENT_YES_CONFIG="${CC_AGENT_YES_CONFIG:-$HOME/.agent-yes.config.yaml}"
+AY_MARKER=">>> setup-agent-mac"
+
+# Matching the "2. Yes, ..." line alone is not safe: option 2 is an arbitrary answer choice on
+# an AskUserQuestion menu and "No, exit" on the trust-this-folder prompt. Requiring Claude
+# Code's "3. No, and tell Claude what to do differently" reject line on the same screen pins
+# this to permission dialogs only. The {0,400} span absorbs an option 2 that wraps across lines.
+read -r -d '' AY_CONFIG_BODY <<'AYCONF' || true
+clis:
+  claude:
+    enterExclude:
+      - pattern: "^\\s*2\\. Yes,[\\s\\S]{0,400}^\\s*3\\. No, and tell Claude what to do differently"
+        flags: m
+    typingRespond:
+      "2\n":
+        - pattern: "^\\s*2\\. Yes,[\\s\\S]{0,400}^\\s*3\\. No, and tell Claude what to do differently"
+          flags: m
+AYCONF
+
+write_agent_yes_config() {
+  mkdir -p "$(dirname "$AGENT_YES_CONFIG")"
+  cat > "$AGENT_YES_CONFIG" <<AYHEAD
+# yaml-language-server: \$schema=https://raw.githubusercontent.com/snomiao/agent-yes/main/agent-yes.config.schema.json
+# $AY_MARKER >>>
+# Written by the setup-agent-mac skill. Delete this file to go back to stock agent-yes
+# behavior; re-run the skill's scripts/setup.sh to restore it.
+#
+# A Claude Code permission dialog looks like this:
+#
+#     Permission rule WebFetch requires confirmation for this tool.
+#     Do you want to allow Claude to fetch this content?
+#     > 1. Yes
+#       2. Yes, and don't ask again for arxiv.org
+#       3. No, and tell Claude what to do differently (esc)
+#
+# enterExclude suppresses the stock Enter on exactly these screens, so taking option 2 is
+# deterministic rather than a race between the two rules.
+#
+# Careful when editing: agent-yes merges maps key by key but REPLACES arrays wholesale.
+# Adding \`enter:\` here would silently drop all ten of its defaults (trust-folder, theme
+# picker, resume menu, "Press Enter to continue"), which is why this file only touches
+# \`enterExclude\` and \`typingRespond\`.
+$AY_CONFIG_BODY
+# <<< setup-agent-mac <<<
+AYHEAD
+}
+
+if [ ! -e "$AGENT_YES_CONFIG" ]; then
+  write_agent_yes_config
+  echo "  agent-yes config: wrote $AGENT_YES_CONFIG (permission dialogs answer \"don't ask again\")"
+elif grep -qF "$AY_MARKER" "$AGENT_YES_CONFIG" 2>/dev/null; then
+  write_agent_yes_config
+  echo "  agent-yes config: refreshed $AGENT_YES_CONFIG"
+else
+  echo "  agent-yes config: $AGENT_YES_CONFIG already exists and was not written by this skill" >&2
+  echo "  agent-yes config: leaving it alone — add this under clis.claude to get option 2:" >&2
+  printf '%s\n' "$AY_CONFIG_BODY" | sed 's/^/      /' >&2
+fi
+
 # --- 4. macOS helper payloads + keep-awake helpers ------------------------------------------
 # Copy the privileged helper payloads out of the plugin cache so they remain available after a
 # marketplace refresh. Installing/removing them still requires one explicit sudo each.

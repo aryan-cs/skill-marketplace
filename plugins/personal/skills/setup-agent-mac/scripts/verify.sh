@@ -24,13 +24,26 @@ case "$env_line" in
   *) echo "  FAIL: expected ANTHROPIC_MODEL=opus and CLAUDE_CODE_EFFORT_LEVEL=xhigh"; fail=1 ;;
 esac
 
-echo "== 2. agent-yes on PATH =="
+echo "== 2. agent-yes on PATH, configured to answer \"don't ask again\" =="
 # grep the path line: an interactive shell may print startup banners we must ignore.
 ay_path="$(run 'command -v ay' | grep -E '/ay$' | tail -1)"
 if [ -n "$ay_path" ]; then
   echo "  $ay_path"; echo "  PASS"
 else
   echo "  FAIL: 'ay' not found (agent-yes not installed / npm bin not on PATH)"; fail=1
+fi
+# Without this config agent-yes only ever presses Enter, which takes option 1 ("Yes", just
+# this once) and leaves Claude Code asking again on the very next tool call. Assert both
+# halves: typingRespond types the "2", enterExclude stops the stock Enter racing it.
+agent_yes_config="${CC_AGENT_YES_CONFIG:-$HOME/.agent-yes.config.yaml}"
+if [ -f "$agent_yes_config" ] \
+  && grep -q '"2\\n":' "$agent_yes_config" \
+  && grep -q 'enterExclude' "$agent_yes_config" \
+  && grep -qF 'No, and tell Claude what to do differently' "$agent_yes_config"; then
+  echo "  $agent_yes_config: permission dialogs take option 2"
+  echo "  PASS"
+else
+  echo "  FAIL: $agent_yes_config is missing the option-2 rules — re-run setup.sh"; fail=1
 fi
 
 echo "== 3. macOS helpers are staged =="

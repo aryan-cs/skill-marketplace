@@ -34,6 +34,11 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
      when npm is absent — and writes the `agent-yes` block: a `claude()` wrapper that routes through `ay`,
      defaults each launch to **full ultracode** (`--effort ultracode`) and **auto mode**
      (`--permission-mode auto`), and holds a `caffeinate` assertion so runs never idle-sleep;
+   - writes `~/.agent-yes.config.yaml` so the permission prompts that still surface are answered
+     with **option 2, "Yes, and don't ask again for X"**, instead of option 1's one-shot yes. Without
+     it, agent-yes only ever presses Enter, so the same domain or command is asked again on the very
+     next tool call. Scoped to permission dialogs only — an AskUserQuestion menu is still left for the
+     user. A config file that this skill did not write is never overwritten;
    - stages the smart-lid daemon/installer and the crash-dialog helper under
      `~/.local/share/setup-agent-mac`, then writes a `keep-awake` block: `awake` (run any command with
      no idle sleep), a `caffeinate`-wrapped `codex`, legacy global `lidawake on|off`, and the
@@ -62,9 +67,10 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
    - **For order-aware lid behavior**, run `lidawake smart-on` once in a normal terminal. Closing the lid
      while unlocked keeps the Mac and its agents running; pressing Touch ID/power to lock while the lid is
      open arms normal sleep, so closing it afterward sleeps immediately. If a keep-awake session runs on
-     battery and reaches 20% — **lid open or closed** — the daemon restores normal sleep, releases the
+     battery and reaches 20% — **lid open or closed** — the daemon restores normal sleep and releases the
      `caffeinate` assertions held by the `claude`/`codex`/`awake` wrappers (the wrapped sessions keep
-     running), and requests sleep immediately. Once charging resumes or the battery recovers above the
+     running). A closed lid is put to sleep immediately; an open one is never forced, so a Mac in use
+     keeps working and sleeps normally on idle or when the lid closes. Once charging resumes or the battery recovers above the
      cutoff, those holds are re-armed so the surviving sessions prevent idle sleep again. AC power never
      triggers the cutoff at any charge. If battery status cannot be read three consecutive times, it
      conservatively restores sleep rather than running without a working guard.

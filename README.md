@@ -36,6 +36,9 @@ Installed skills appear in the `/` menu as `/personal:<name>`, and auto-trigger 
 - **[`quality-review`](plugins/personal/skills/quality-review/)** — reviews a code diff or pull request for correctness bugs, security issues, performance problems, and readability, reporting findings by severity with concrete fixes.
 - **[`setup-agent-mac`](plugins/personal/skills/setup-agent-mac/)** — bootstraps a Mac for agent work: forces Opus + full ultracode as the default (via shell env vars and a wrapper), installs [agent-yes](https://www.npmjs.com/package/agent-yes) with the auto-approve `claude` wrapper, and adds the macOS helpers long agent runs need — keep-awake, an order-aware smart-lid mode (close first to keep agents running, or lock first and then close to sleep), and opt-in suppression of the "quit unexpectedly" crash dialog that aborting headless browsers spam. Ships tested policy/setup/verification scripts plus deterministic smart-lid and crash-dialog tests.
 - **[`check-paper`](plugins/personal/skills/check-paper/)** — reviews an academic (ML/CS) paper and its figures against a full submission checklist: narrative prose, a results-first abstract, hand-checked citations, structure & venue-template compliance, anonymization, reproducibility & rigor, no em dashes / no AI-sounding writing, and figure/table standards (Turbo colormap, semantic color, spacing, legible labels). Bundles a ready-to-use arXiv/NeurIPS-style preprint template plus citation and AI-tell checker scripts.
+- **[`codex`](plugins/personal/skills/codex/)** — uses OpenAI Codex as an autonomous peer rather than a tool: delegates self-contained tasks, argues a design across multiple turns via captured thread ids, and fans out parallel sub-agents. Never prompts for a model or reasoning effort, so it works unattended, and inherits the model from `~/.codex/config.toml` instead of hardcoding one. Bundles `codex-side/install.sh`, which installs the mirror image into `~/.codex/skills/` so Codex can call Claude the same way.
+- **[`sunday-inbox`](plugins/personal/skills/sunday-inbox/)** — triages Sunday-managed Gmail, tracks replies, tasks, deadlines, and temporary versus permanently protected records, and can send explicitly requested phone updates through the configured Mac's fixed-self Messages fallback when no direct texting tool is available.
+- **[`uiuc-icrn`](plugins/personal/skills/uiuc-icrn/)** — operates a privately configured UIUC/NCSA ICRN VS Code and GPU instance end to end: starts or restarts the server, follows the institutional browser flow, runs background Jupyter terminal commands and jobs without visible typing, mirrors the current local project beneath the configured remote sandbox, and captures the exact Chrome window instead of the desktop. The public package contains only placeholders; accounts, hosts, paths, browser profiles, allocation choices, and tokens remain in owner-only local files.
 
 ## Install it (once, on any machine)
 
@@ -49,6 +52,20 @@ Inside a Claude Code session:
 `personal@aryan-skills` is `<plugin-name>@<marketplace-name>`. The marketplace name is the `name` field in `marketplace.json` — not the repo name.
 
 Your skills then appear in the `/` menu, namespaced by the plugin: `/personal:quality-review`.
+
+### Install one skill in Codex
+
+Codex can install an individual skill directly from its nested GitHub path. For example, this installs `uiuc-icrn` without importing the rest of the `personal` Claude plugin:
+
+```sh
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
+  --repo aryan-cs/skill-marketplace \
+  --path plugins/personal/skills/uiuc-icrn
+```
+
+Restart Codex after installation. Standalone skills appear on Codex's **Skills** page, not its **Plugins** page. To update one, remove its existing installed copy through Codex's skill management UI and run the same installer again; the installer deliberately refuses to overwrite an existing skill.
+
+The `uiuc-icrn` browser helpers require macOS, Chrome, Accessibility access, Screen Recording access, and Swift/Xcode command-line tools. Its background Jupyter terminal is used only after the private configuration described in the skill has been completed.
 
 ## Add a new skill
 

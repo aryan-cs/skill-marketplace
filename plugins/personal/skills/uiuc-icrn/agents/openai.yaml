@@ -1,0 +1,6 @@
+interface:
+  display_name: "UIUC ICRN"
+  short_description: "Operate a configured ICRN VS Code and GPU instance"
+  icon_small: "./assets/uiuc-icrn.png"
+  icon_large: "./assets/uiuc-icrn.png"
+  default_prompt: "Use $uiuc-icrn to start or recover my configured UIUC ICRN instance and complete the requested work in the matching remote project."
