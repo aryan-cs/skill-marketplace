@@ -314,9 +314,15 @@ release_caffeinate_assertions() {
     # -w target -- including the holds this daemon restores, whose parent is the
     # daemon itself: recording that parent would make the next recovery run
     # `caffeinate -w <daemon>`, a hold that never ends. Otherwise caffeinate
-    # wraps its parent.
-    target="$("$PS_BIN" -o args= -p "$pid" 2>/dev/null \
-      | awk '{ for (i = 1; i < NF; i++) if ($i == "-w") { print $(i + 1); exit } }')"
+    # wraps its parent. Only caffeinate's own options are read: the scan stops
+    # at the wrapped command, whose arguments (`claude -w NAME`) are not ours.
+    target="$("$PS_BIN" -o args= -p "$pid" 2>/dev/null | awk '{
+      for (i = 2; i <= NF; i++) {
+        if ($i == "-w") { if (i < NF) print $(i + 1); exit }
+        if ($i == "-t") { i++; continue }
+        if ($i !~ /^-[dimsu]+$/) exit
+      }
+    }')"
     [ -n "$target" ] || target="$("$PS_BIN" -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
     if "$KILL_BIN" -TERM "$pid" 2>/dev/null; then
       released=$((released + 1))

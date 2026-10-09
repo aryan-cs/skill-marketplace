@@ -213,7 +213,8 @@ cat > "$fake_ps_w" <<'SH'
 # Invoked as: ps -o FIELD= -p PID
 case "$2:$4" in
   args=:4242) printf '/usr/bin/caffeinate -dimsu -w 4142\n' ;;
-  args=:*) printf '/usr/bin/caffeinate -dimsu\n' ;;
+  # A wrapper's hold: the wrapped command's own -w is not a caffeinate option.
+  args=:*) printf '/usr/bin/caffeinate -dimsu ay claude -w 9999\n' ;;
   ppid=:4242) printf '  7777\n' ;;
   ppid=:*) printf '  %s\n' "$(( $4 - 100 ))" ;;
 esac
@@ -230,6 +231,9 @@ grep -q -- "-dimsu -w 4142" "$caff_log" || fail "a -w hold should be restored fo
 grep -q -- "-dimsu -w 4143" "$caff_log" || fail "a wrapping hold should be restored for its parent: $(cat "$caff_log")"
 if grep -q -- "-w 7777" "$caff_log"; then
   fail "a -w hold must not be restored for its parent (the daemon itself)"
+fi
+if grep -q -- "-w 9999" "$caff_log"; then
+  fail "the wrapped command's own -w argument was mistaken for a caffeinate target"
 fi
 
 echo "== battery telemetry failure with the lid open still releases caffeinate holds =="
