@@ -4,6 +4,18 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-10-09
+
+### Fixed
+- **`setup-agent-mac` smart-lid: a battery reading flickering around the cutoff re-armed keep-awake.** The low-battery latch was released by any sample above the cutoff. So on battery, readings of 20 → 21 → 20 released it at 21%, restored `disablesleep 1` and the `caffeinate` holds, and tripped again at the next periodic check, up to a minute later.
+  - **The fix:** on battery, a `low-battery-sleep` latch now needs the charge to clear the cutoff by a recovery margin. That margin is `SMART_LID_RECOVERY_MARGIN_PERCENT`, default 5, so release happens above 25%; 0 restores the old behavior.
+  - **AC power** still releases the latch at any charge.
+  - **The lid-event fast path** uses the same rule.
+  - **Entering the latch is unchanged.**
+  - **`battery-unavailable-sleep`,** a telemetry failure rather than a low charge, still releases as soon as a reading is above the cutoff.
+  - **Validation:** the margin is checked like the other settings, and the cutoff plus the margin may not exceed 100.
+- `tests/test-smart-lid.sh` gains the flicker case and these release rules: AC at any charge, a margin of 0, the lid-event fast path, entry unchanged, and the unavailable latch. It also checks validation of the margin. The flicker case fails against the previous daemon.
+
 ## [0.13.2] - 2026-10-09
 
 ### Fixed
