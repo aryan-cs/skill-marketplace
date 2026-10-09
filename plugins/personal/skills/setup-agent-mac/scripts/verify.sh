@@ -61,6 +61,23 @@ else
   echo "  FAIL: helper scripts or the lidawake/crashdialogs shell functions are missing"; fail=1
 fi
 
+echo "== 3b. agent turns hold the Mac awake only while they run =="
+# Without the hooks a closed lid cannot tell a finished agent from a working one.
+claude_settings="${CC_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+codex_hooks="${CC_CODEX_HOOKS:-$HOME/.codex/hooks.json}"
+if [ -x "$agent_mac_home/agent-hold.sh" ] \
+  && grep -q "agent-hold.sh' start" "$claude_settings" 2>/dev/null \
+  && grep -q "agent-hold.sh' stop" "$claude_settings" 2>/dev/null; then
+  echo "  Claude Code: agent-hold hooks registered in $claude_settings"
+  echo "  PASS"
+else
+  echo "  FAIL: the agent-hold hooks are missing from $claude_settings — re-run setup.sh"; fail=1
+fi
+if grep -q "agent-hold.sh' start" "$codex_hooks" 2>/dev/null; then
+  # Codex runs a non-managed hook only after it is trusted in /hooks, which only the user can do.
+  echo "  Codex: registered in $codex_hooks — approve them once in codex's /hooks if you haven't"
+fi
+
 echo "== 4. the claude wrapper carries the ultracode + auto-mode flags =="
 # The two session-scoped settings that cannot live in an env var, so the wrapper must supply
 # them on every launch. Read the function body back out of a fresh interactive shell.

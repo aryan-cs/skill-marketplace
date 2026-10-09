@@ -1,8 +1,11 @@
 #!/bin/bash
-# smart-lid-daemon.sh — order-aware lid sleep with a closed-lid battery cutoff.
+# smart-lid-daemon.sh — order-aware lid sleep with a closed-lid battery cutoff and
+# closed-lid idle sleep.
 #
 # Real mode runs as a root LaunchDaemon and controls `pmset disablesleep`.
-# Simulation mode accepts `LOCKED CLOSED [POWER_SOURCE BATTERY_PERCENT]` on stdin.
+# Simulation mode accepts `LOCKED CLOSED [POWER_SOURCE BATTERY_PERCENT [ACTIVITY]]`
+# on stdin, where ACTIVITY is `busy` or `idle` and each line advances a simulated
+# clock by SMART_LID_SIMULATION_STEP_SECONDS.
 set -uo pipefail
 
 PMSET="${SMART_LID_PMSET:-/usr/bin/pmset}"
@@ -15,6 +18,13 @@ BATTERY_CHECK_LOOPS="${SMART_LID_BATTERY_CHECK_LOOPS:-600}"
 BATTERY_RETRY_LOOPS="${SMART_LID_BATTERY_RETRY_LOOPS:-50}"
 BATTERY_FAILURE_LIMIT="${SMART_LID_BATTERY_FAILURE_LIMIT:-3}"
 LOW_BATTERY_PERCENT="${SMART_LID_LOW_BATTERY_PERCENT:-20}"
+# A close-first session exists so work can finish with the lid shut. Once nothing
+# has needed the Mac awake for IDLE_SLEEP_SECONDS (0 disables this), it sleeps as
+# an open Mac would on idle. Activity is sampled every ACTIVITY_CHECK_SECONDS.
+IDLE_SLEEP_SECONDS="${SMART_LID_IDLE_SLEEP_SECONDS:-300}"
+ACTIVITY_CHECK_SECONDS="${SMART_LID_ACTIVITY_CHECK_SECONDS:-30}"
+SIMULATION_STEP_SECONDS="${SMART_LID_SIMULATION_STEP_SECONDS:-60}"
+SUDO_BIN="${SMART_LID_SUDO:-/usr/bin/sudo}"
 # `caffeinate CMD` runs CMD as its PARENT and re-execs itself as a child, so
 # signalling the caffeinate PID drops its sleep assertion while the wrapped
 # command keeps running. Never signal the parent or a process group: that would
@@ -47,6 +57,10 @@ battery_read_failures=0
 simulation_mode=0
 simulation_power_source=""
 simulation_battery_percent=""
+simulation_activity=""
+simulation_clock=0
+idle_since=""
+next_activity_check=0
 
 validate_positive_integer() {
   local name="$1" value="$2"
@@ -58,12 +72,19 @@ validate_positive_integer() {
   esac
 }
 
+validate_nonnegative_integer() {
+  [ "$2" = 0 ] || validate_positive_integer "$1" "$2"
+}
+
 validate_positive_integer SMART_LID_BATTERY_CHECK_LOOPS "$BATTERY_CHECK_LOOPS"
 validate_positive_integer SMART_LID_BATTERY_RETRY_LOOPS "$BATTERY_RETRY_LOOPS"
 validate_positive_integer SMART_LID_BATTERY_FAILURE_LIMIT "$BATTERY_FAILURE_LIMIT"
 validate_positive_integer SMART_LID_LOW_BATTERY_PERCENT "$LOW_BATTERY_PERCENT"
 [ "$LOW_BATTERY_PERCENT" -le 100 ] \
   || { echo "SMART_LID_LOW_BATTERY_PERCENT must be between 1 and 100" >&2; exit 64; }
+validate_nonnegative_integer SMART_LID_IDLE_SLEEP_SECONDS "$IDLE_SLEEP_SECONDS"
+validate_positive_integer SMART_LID_ACTIVITY_CHECK_SECONDS "$ACTIVITY_CHECK_SECONDS"
+validate_positive_integer SMART_LID_SIMULATION_STEP_SECONDS "$SIMULATION_STEP_SECONDS"
 
 log() {
   local message="$*"
@@ -144,6 +165,61 @@ read_battery_status() {
   printf '%s %s\n' "$power_source" "$battery_percent"
 }
 
+# Is anything doing work that needs the Mac awake? Prints what, and returns 0 if
+# so, 1 if not, or 2 if that cannot be determined. Work is whatever would keep an
+# open Mac from idle-sleeping: an idle-sleep assertion from any process (an agent
+# turn via the agent-hold hooks, the Claude app's keep-awake while a session
+# works, `awake`/caffeinate, audio playback, ...) or input since the last check
+# (clamshell use with an external keyboard). powerd's own assertions are ignored
+# except "display is on", which with the lid shut means an external display is in
+# use; so are sharingd's short-lived Handoff holds.
+read_activity() {
+  local raw found idle_ns
+  if [ "$simulation_mode" = 1 ]; then
+    case "$simulation_activity" in
+      busy) printf 'simulated activity\n'; return 0 ;;
+      idle) return 1 ;;
+      *) return 2 ;;
+    esac
+  fi
+  raw="$($PMSET -g assertions 2>/dev/null)" || return 2
+  case "$raw" in *"Listed by owning process"*) ;; *) return 2 ;; esac
+  # Lines look like:   pid 61987(Claude): [0x0004bd0c0001a1b4] 33:27:25 NoIdleSleepAssertion named: "Electron"
+  # Owner names can contain spaces, so split on "(" / "): [" rather than on fields.
+  found="$(awk '
+    /Listed by owning process/ { listed = 1; next }
+    /^[^[:space:]]/ { listed = 0 }
+    !listed || $1 != "pid" || found { next }
+    {
+      lp = index($0, "("); rp = index($0, "): [")
+      if (!lp || rp <= lp) next
+      owner = substr($0, lp + 1, rp - lp - 1)
+      rest = substr($0, rp + 3)
+      split(rest, field, " ")
+      type = field[3]
+      name = rest; sub(/^[^"]*named: "/, "", name); sub(/"[[:space:]]*$/, "", name)
+      if (type != "PreventUserIdleSystemSleep" && type != "PreventSystemSleep" && type != "NoIdleSleepAssertion") next
+      if (owner == "powerd" && name !~ /display is on/) next
+      if (owner == "sharingd") next
+      print owner " (" name ")"; found = 1
+    }
+  ' <<<"$raw")"
+  if [ -n "$found" ]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  idle_ns="$($IOREG -c IOHIDSystem -d 4 -r -k HIDIdleTime 2>/dev/null \
+    | awk '/"HIDIdleTime" =/ { value = $NF } END { if (value != "") print value }')"
+  case "$idle_ns" in
+    ''|*[!0-9]*) ;;
+    *) if [ "$idle_ns" -lt $((ACTIVITY_CHECK_SECONDS * 1000000000)) ]; then
+         printf 'recent keyboard or trackpad input\n'
+         return 0
+       fi ;;
+  esac
+  return 1
+}
+
 save_state() {
   local dir tmp signature
   signature="$phase:$prev_locked:$prev_closed:$desired"
@@ -165,8 +241,10 @@ load_state_for_closed_restart() {
   local saved_phase
   saved_phase="$(awk -F= '$1 == "phase" {print $2; exit}' "$STATE_FILE")"
   case "$saved_phase" in
-    closed-keep-awake)
-      phase="$saved_phase"
+    closed-keep-awake|closed-idle-sleep)
+      # A pending idle sleep is re-earned rather than replayed: work may have
+      # started since, and enforce_closed_idle_sleep() re-checks within a cycle.
+      phase="closed-keep-awake"
       desired=1
       ;;
     low-battery-sleep|battery-unavailable-sleep)
@@ -277,6 +355,9 @@ transition_state() {
     if [ "$closed" = 1 ] && [ "$phase" = "closed-keep-awake" ]; then
       # Ignore the automatic lock caused by a close-first keep-awake session.
       desired=1
+    elif [ "$closed" = 1 ] && [ "$phase" = "closed-idle-sleep" ]; then
+      # Nor may a late lock cancel a pending idle sleep or its retry.
+      :
     else
       phase="locked-open"; desired=0
       request_sleep=0
@@ -343,7 +424,7 @@ release_caffeinate_assertions() {
 # in the meantime is skipped rather than leaking an assertion forever.
 restore_caffeinate_assertions() {
   [ -n "$released_caffeinate_targets" ] || return 0
-  local pid restored=0
+  local pid uid restored=0
   if [ "$RELEASE_CAFFEINATE" != 1 ] || [ ! -x "$CAFFEINATE" ]; then
     released_caffeinate_targets=""
     return 0
@@ -352,8 +433,18 @@ restore_caffeinate_assertions() {
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     # Only re-arm sessions that are still alive.
     "$KILL_BIN" -0 "$pid" 2>/dev/null || continue
-    # Detached on purpose: caffeinate -w blocks until the target exits.
-    "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
+    # Detached on purpose: caffeinate -w blocks until the target exits. Run it as
+    # the session's own user, so the agent-hold hook can release it when the
+    # agent's turn ends instead of it holding the Mac until the session exits.
+    uid="$("$PS_BIN" -o uid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    case "$uid" in
+      ''|*[!0-9]*|0) uid="" ;;
+    esac
+    if [ "$EUID" = 0 ] && [ -n "$uid" ]; then
+      "$SUDO_BIN" -n -u "#$uid" "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
+    else
+      "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
+    fi
     restored=$((restored + 1))
   done
   released_caffeinate_targets=""
@@ -483,6 +574,48 @@ enforce_low_battery_sleep() {
   desired=0
 }
 
+# With the lid shut in a close-first session, sleep once nothing has needed the
+# Mac awake for IDLE_SLEEP_SECONDS -- the agent's turn finished, the app let go
+# of its keep-awake -- rather than staying up until the battery cutoff.
+enforce_closed_idle_sleep() {
+  [ "$IDLE_SLEEP_SECONDS" -gt 0 ] || return 0
+  if [ "$phase" != "closed-keep-awake" ]; then
+    idle_since=""
+    next_activity_check=0
+    return 0
+  fi
+  # A simulation line without the activity column is not exercising this guard.
+  if [ "$simulation_mode" = 1 ] && [ -z "$simulation_activity" ]; then
+    return 0
+  fi
+  local now="$SECONDS" activity rc
+  [ "$simulation_mode" != 1 ] || now="$simulation_clock"
+  [ "$now" -ge "$next_activity_check" ] || return 0
+  next_activity_check=$((now + ACTIVITY_CHECK_SECONDS))
+
+  activity="$(read_activity)"
+  rc=$?
+  if [ "$rc" != 1 ]; then
+    # Busy, or unknown: an unreadable sample must never sleep a Mac mid-task.
+    if [ -n "$idle_since" ]; then
+      log "work resumed with the lid closed: ${activity:-activity unknown}"
+    fi
+    idle_since=""
+    return 0
+  fi
+  if [ -z "$idle_since" ]; then
+    idle_since="$now"
+    log "lid closed and nothing needs the Mac awake; sleeping in ${IDLE_SLEEP_SECONDS}s unless work resumes"
+  fi
+  [ $((now - idle_since)) -ge "$IDLE_SLEEP_SECONDS" ] || return 0
+  phase="closed-idle-sleep"
+  desired=0
+  request_sleep=1
+  sleep_reason="lid closed and nothing has needed the Mac awake for $((now - idle_since))s"
+  log "$sleep_reason; restoring normal sleep"
+  idle_since=""
+}
+
 apply_power_state() {
   local actual=""
   reconcile_count=$((reconcile_count + 1))
@@ -516,7 +649,7 @@ print_state() {
 }
 
 simulate() {
-  local locked closed power_source battery_percent
+  local locked closed power_source battery_percent activity
   # 'simulate' is a test/debug path. Refuse to issue REAL power changes as root: that is what the
   # 'run' daemon (with its cleanup trap) is for, and without a trap here a `sudo ... simulate` could
   # leave disablesleep stuck at 1. Applying against a mocked pmset as a normal user stays allowed.
@@ -536,12 +669,15 @@ simulate() {
   # explicit opt-in; the tests that cover the release pass SMART_LID_RELEASE_CAFFEINATE=1
   # along with mocked pgrep/kill.
   RELEASE_CAFFEINATE="${SMART_LID_RELEASE_CAFFEINATE:-0}"
-  while read -r locked closed power_source battery_percent _; do
+  while read -r locked closed power_source battery_percent activity _; do
     [ -n "${locked:-}" ] || continue
     simulation_power_source="${power_source:-}"
     simulation_battery_percent="${battery_percent:-}"
+    simulation_activity="${activity:-}"
+    simulation_clock=$((simulation_clock + SIMULATION_STEP_SECONDS))
     transition_state "$locked" "$closed"
     enforce_low_battery_sleep
+    enforce_closed_idle_sleep
     save_state
     if [ "${SMART_LID_SIMULATION_APPLY:-0}" = 1 ]; then apply_power_state; fi
     print_state
@@ -552,15 +688,23 @@ simulate() {
 }
 
 status() {
-  local locked closed sleep_disabled battery_status power_source battery_percent
+  local locked closed sleep_disabled battery_status power_source battery_percent activity
   locked="$(read_locked)" || { echo "status=error reason=lock-sensor-unavailable"; return 1; }
   closed="$(read_closed)" || { echo "status=error reason=lid-sensor-unavailable"; return 1; }
   sleep_disabled="$(read_sleep_disabled)" || sleep_disabled="unknown"
   battery_status="$(read_battery_status)" || battery_status="unknown unknown"
   power_source="${battery_status%% *}"
   battery_percent="${battery_status#* }"
-  printf 'status=ok locked=%s closed=%s SleepDisabled=%s PowerSource=%s BatteryPercent=%s LowBatteryCutoff=%s\n' \
-    "$locked" "$closed" "${sleep_disabled:-unknown}" "$power_source" "$battery_percent" "$LOW_BATTERY_PERCENT"
+  activity="$(read_activity)"
+  case $? in
+    0) activity="busy: $activity" ;;
+    1) activity="idle" ;;
+    *) activity="unknown" ;;
+  esac
+  printf 'status=ok locked=%s closed=%s SleepDisabled=%s PowerSource=%s BatteryPercent=%s LowBatteryCutoff=%s IdleSleepSeconds=%s\n' \
+    "$locked" "$closed" "${sleep_disabled:-unknown}" "$power_source" "$battery_percent" "$LOW_BATTERY_PERCENT" "$IDLE_SLEEP_SECONDS"
+  # What would keep a closed lid awake right now, if it were closed.
+  printf 'activity=%s\n' "$activity"
   if [ -r "$STATE_FILE" ]; then
     tr '\n' ' ' < "$STATE_FILE"; printf '\n'
   fi
@@ -584,6 +728,7 @@ run_daemon() {
     if locked="$(read_locked)" && closed="$(read_closed)"; then
       transition_state "$locked" "$closed"
       enforce_low_battery_sleep
+      enforce_closed_idle_sleep
     else
       phase="failsafe"; desired=0; request_sleep=0; sleep_reason=""; prev_locked=""; prev_closed=""
       # This drops any battery latch, so sample as soon as the sensors return

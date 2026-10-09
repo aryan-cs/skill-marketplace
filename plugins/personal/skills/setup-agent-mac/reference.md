@@ -96,26 +96,25 @@ export PATH="$HOME/.bun/bin:$PATH"
 # <<< bun runtime <<<
 
 # >>> agent-yes >>>
+# The Mac is held awake per turn by the agent-hold hooks in ~/.claude/settings.json.
 claude() {
-  if command -v caffeinate >/dev/null 2>&1; then
-    if command -v ay >/dev/null 2>&1; then
-      caffeinate -dimsu ay claude -- --effort ultracode --permission-mode auto "$@"
-    else
-      caffeinate -dimsu claude --effort ultracode --permission-mode auto "$@"
-    fi
+  if command -v ay >/dev/null 2>&1; then
+    command ay claude -- --effort ultracode --permission-mode auto "$@"
   else
-    if command -v ay >/dev/null 2>&1; then
-      command ay claude -- --effort ultracode --permission-mode auto "$@"
-    else
-      command claude --effort ultracode --permission-mode auto "$@"
-    fi
+    command claude --effort ultracode --permission-mode auto "$@"
   fi
 }
 # <<< agent-yes <<<
+```
 
+If the hooks cannot be registered (an unreadable or invalid settings file), `setup.sh` falls back to the
+previous wrappers, which hold `caffeinate -dimsu` for the whole session: `claude()` wraps `ay claude` in it,
+and a `codex()` wrapper is written that does the same.
+
+```sh
 # >>> keep-awake >>>
 awake() { caffeinate -dimsu "$@"; }
-codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
+# codex: held awake per turn by the agent-hold hooks in ~/.codex/hooks.json (approve them once in /hooks).
 lidawake() {
   local sl="$HOME/.local/share/setup-agent-mac/install-smart-lid.sh"   # setup.sh bakes the resolved absolute path here
   case "${1:-status}" in
@@ -244,9 +243,10 @@ leaves the file alone.
 
 Two different sleep paths matter, and they need different tools:
 
-- **Idle sleep** (no input for a while, lid open): handled by `caffeinate`. The `claude()` and
-  `codex()` wrappers already run under `caffeinate -dimsu`, so a running agent won't idle-sleep.
-  Use `awake <cmd>` to give any other command the same protection.
+- **Idle sleep** (no input for a while, lid open): handled by `caffeinate` assertions. Claude Code
+  and Codex take one for each turn through the agent-hold hooks (below), so a working agent won't
+  idle-sleep, and one waiting at its prompt doesn't hold the Mac. Use `awake <cmd>` to give any other
+  command the same protection for as long as it runs.
 - **Lid-closed (clamshell) sleep**: `caffeinate` does **not** prevent this on a MacBook with no
   external display — closing the lid forces sleep regardless of assertions. Preventing it requires
   `pmset disablesleep 1`, which is privileged.
@@ -258,6 +258,7 @@ first**, because closing the lid can itself make `IOConsoleLocked` change to `Ye
 | Event order | Result | Why |
 |---|---|---|
 | Lid closes while unlocked | Keep awake (`disablesleep 1`) | This was an intentional close-first agent session; a later automatic lock is ignored until the lid opens. |
+| Lid closed after close-first, and nothing has needed the Mac awake for 5 minutes | Restore sleep and request it (`disablesleep 0`, `pmset sleepnow`) | The work the session was kept awake for has finished. |
 | Touch ID/power locks while lid is open, then lid closes | Restore sleep and request it immediately (`disablesleep 0`, `pmset sleepnow`) | The explicit lock-first transition arms normal clamshell sleep. |
 | Mac on battery reaches 20%, lid closed | Restore sleep, release `caffeinate` assertions, and request sleep immediately (`disablesleep 0`, `pmset sleepnow`) | This last-resort cutoff prevents a keep-awake session from draining the battery completely. |
 | Mac on battery reaches 20%, lid open | Restore sleep and release `caffeinate` assertions (`disablesleep 0`), without `pmset sleepnow` | Someone may be using the Mac; it now sleeps normally on idle or when the lid closes. |
@@ -286,11 +287,12 @@ lock, sleeps) exactly as it would have without the latch.
 Drawing from AC never trips the cutoff at any charge, so a Mac charging from below 20% can continue a
 deliberate close-first session.
 
-Clearing `disablesleep` is not sufficient on its own. The `claude()` / `codex()` / `awake()` wrappers this skill
-installs run under `caffeinate -dimsu`, and `-i` holds a `PreventUserIdleSystemSleep` assertion that `pmset` does
-not override. At the cutoff the daemon therefore also signals the `caffeinate` processes. This does **not** kill
-the agent sessions: `caffeinate CMD` runs `CMD` as its parent and re-execs itself as a child, so signalling the
-caffeinate PID drops the assertion while the wrapped command keeps running. The daemon signals caffeinate PIDs
+Clearing `disablesleep` is not sufficient on its own. The agent-hold hooks hold `caffeinate -i -w <agent>` for
+each turn and `awake()` runs its command under `caffeinate -dimsu`. In both, `-i` holds a
+`PreventUserIdleSystemSleep` assertion that `pmset` does not override. At the cutoff the daemon therefore also
+signals the `caffeinate` processes. This does **not** kill the agent sessions. A hook's hold is a separate
+process. `caffeinate CMD` runs `CMD` as its parent and re-execs itself as a child, so signalling the caffeinate
+PID drops the assertion while the wrapped command keeps running. The daemon signals caffeinate PIDs
 individually and never a process group, since signalling the group would take the session down with it. Set
 `SMART_LID_RELEASE_CAFFEINATE=0` to disable this.
 
@@ -308,6 +310,64 @@ conservatively restores normal sleep, because it can no longer enforce the cutof
 `sleepnow` is requested only when the lid is closed.
 
 The cutoff defaults to 20% and is configurable with `SMART_LID_LOW_BATTERY_PERCENT`.
+
+### Sleeping once the work is done
+
+A close-first session exists so work can finish with the lid shut. Once nothing has needed the Mac awake for
+five minutes, the daemon enters `closed-idle-sleep`: it restores `disablesleep 0` and calls `pmset sleepnow`,
+at any charge. That is the same test macOS applies before idle-sleeping an open Mac, so "work" means anything
+macOS itself would stay awake for. Every 30 seconds, with the lid closed, the daemon reads `pmset -g assertions`
+and counts:
+
+- an idle-sleep assertion (`PreventUserIdleSystemSleep`, `PreventSystemSleep`, `NoIdleSleepAssertion`) from any
+  process. That covers an agent turn in progress, the Claude app's own keep-awake while a desktop or Remote
+  Control session works, `awake <cmd>`, and audio playback.
+- powerd's "display is on" assertion. With the lid closed, that means an external display is in use.
+- keyboard or trackpad input since the last check (`HIDIdleTime`), for clamshell use with an external keyboard.
+
+It ignores powerd's other assertions, sharingd's short-lived Handoff holds, and display-only wake locks.
+An unreadable sample counts as busy, so a failed read can never put a working Mac to sleep. Any work resets the
+five-minute window. Opening the lid ends the idle check, and so does the low-battery cutoff, which still wins.
+
+For this to work, an agent must hold the Mac awake only while it is actually working. `setup.sh` therefore
+registers `agent-hold.sh` as a hook:
+- **Claude Code**, in `~/.claude/settings.json`:
+  - `UserPromptSubmit` takes a `caffeinate -i -w <agent pid>` hold.
+  - `Stop` releases it, and so do `StopFailure`, `SessionEnd`, and the `idle_prompt` notification, which catch
+    turns that end without a `Stop`.
+- **Codex**, in `~/.codex/hooks.json`: the same scheme, with `Interrupt` instead of the last two.
+
+`agent-hooks.js` merges these into the existing files, leaving other keys and hooks alone. It is JavaScript for
+Automation, which is always present on macOS, so no python3 or jq is needed. The whole-session `caffeinate` in
+the `claude()`/`codex()` wrappers is then dropped, so a session that finished its task and sits open at its
+prompt holds nothing.
+
+Details of the hook:
+- **Tied to its own session.** The hook holds on behalf of the CLI process that ran it, which is its direct
+  parent, so a hold can never outlive its session. It prints nothing, since `UserPromptSubmit` stdout is
+  injected into the conversation, and it always exits 0.
+- **Re-armed holds.** If the low-battery cutoff released a turn's hold and recovery re-armed it, the daemon runs
+  the re-armed hold as the session's user, so that turn's `Stop` releases it too.
+
+`lidawake status` prints an `activity=` line showing what is keeping a closed lid awake, such as
+`busy: Claude (Electron)`, `busy: caffeinate (caffeinate command-line tool)`, or `idle`. The system log shows
+when the window starts and ends; read it with
+`log show --predicate 'eventMessage CONTAINS "lid closed"' --last 1h`.
+
+Configure it with:
+- `SMART_LID_IDLE_SLEEP_SECONDS`: the idle window, default 300. Set it to 0 to keep a closed lid awake until the
+  battery cutoff, as before.
+- `SMART_LID_ACTIVITY_CHECK_SECONDS`: the sampling period, default 30.
+
+Limits:
+- **Codex skips hooks it has not been told to trust.** Open `codex` once and approve the agent-hold hooks in
+  `/hooks`. Until then, Codex turns hold nothing, and a closed-lid Mac can sleep five minutes into a Codex run.
+- **A background job that outlives the agent's turn** (a long build the agent started and stopped watching) is
+  not covered by the turn's hold. Run it with `awake` so it holds the Mac itself. Desktop-app sessions are
+  covered by the app's own keep-awake, which accounts for background work.
+- **The Claude app's keep-awake** is the Code-tab setting "Keep computer awake while Claude works". While it is
+  holding, a closed lid stays awake. If `lidawake status` keeps reporting `busy: Claude (Electron)` with no
+  session working, that setting is the one to check.
 
 Smart mode pre-arms `disablesleep 1` whenever the lid is open and the console is unlocked, because enabling it
 only after lid closure may be too late. Consequently, ordinary system sleep is suppressed in that state too.
@@ -327,9 +387,10 @@ Why installation needs a normal terminal: `pmset` and a system LaunchDaemon requ
 managed environments deny sudo inside Claude Code sessions. On an MDM-managed Mac, power settings may
 also be locked by the organization.
 
-Safety: close-first deliberately leaves a lidded Mac running. Prefer AC power and never put it in a bag
-in that state; it can run hot and drain the battery before the 20% cutoff is reached. Lock first, then
-close, whenever you want sleep; the cutoff is a last resort, not a substitute for intentional sleep.
+Safety: close-first deliberately leaves a lidded Mac running while work is in progress. Prefer AC power and
+never put it in a bag in that state; it can run hot and drain the battery before the work finishes or the 20%
+cutoff is reached. Lock first, then close, whenever you want sleep straight away; idle sleep and the cutoff
+are backstops, not a substitute for intentional sleep.
 
 ## Crash-dialog suppression (macOS)
 

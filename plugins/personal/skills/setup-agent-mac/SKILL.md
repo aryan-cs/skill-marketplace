@@ -1,6 +1,6 @@
 ---
 name: setup-agent-mac
-description: "Sets up a Mac for agent work the way Aryan likes it — defaults Claude Code to the latest Opus (Opus 5 today, and it rolls forward on its own) with xhigh as the env effort floor, launches every interactive session on full ultracode effort with auto mode on, installs agent-yes with the auto-approve `claude` wrapper, and adds the macOS helpers long agent runs need: keep-awake, order-aware lid behavior (close first to keep running, lock first and then close to sleep, and automatically restore sleep at 20% battery in any lid position), and opt-in suppression of the 'quit unexpectedly' crash dialog. Use when the user asks to set up Claude Code, configure a new machine/laptop, make Opus or ultracode/xhigh the default, auto-upgrade to the newest Opus, turn auto mode (`--permission-mode auto`) on by default, stop the model reverting to Sonnet or medium effort on restart, install agent-yes, keep Claude Code/Codex running with the lid closed, make lid sleep depend on whether the Mac was explicitly locked first, prevent keep-awake mode from draining the battery completely, or stop repeated 'Google Chrome quit unexpectedly' crash popups caused by headless browsers that agent tooling launches."
+description: "Sets up a Mac for agent work the way Aryan likes it — defaults Claude Code to the latest Opus (Opus 5 today, and it rolls forward on its own) with xhigh as the env effort floor, launches every interactive session on full ultracode effort with auto mode on, installs agent-yes with the auto-approve `claude` wrapper, and adds the macOS helpers long agent runs need: keep-awake, order-aware lid behavior (close first to keep running until the work is done, lock first and then close to sleep, and automatically restore sleep at 20% battery in any lid position), turn-scoped keep-awake hooks for Claude Code and Codex, and opt-in suppression of the 'quit unexpectedly' crash dialog. Use when the user asks to set up Claude Code, configure a new machine/laptop, make Opus or ultracode/xhigh the default, auto-upgrade to the newest Opus, turn auto mode (`--permission-mode auto`) on by default, stop the model reverting to Sonnet or medium effort on restart, install agent-yes, keep Claude Code/Codex running with the lid closed, make a closed-lid Mac sleep once its agents finish, make lid sleep depend on whether the Mac was explicitly locked first, prevent keep-awake mode from draining the battery completely, or stop repeated 'Google Chrome quit unexpectedly' crash popups caused by headless browsers that agent tooling launches."
 ---
 
 # Set up an agent Mac
@@ -56,20 +56,27 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
    non-zero on any failure. Crash-dialog suppression is opt-in, so verify **reports** its state
    (`status=enabled|disabled`) rather than failing on it. For
    development or review, also run `tests/test-smart-lid.sh`; it deterministically exercises close-first,
-   lock-first, simultaneous sensor changes, the 20% battery cutoff in every lid position, the
-   `caffeinate` assertion release, daemon restart, and
-   install/uninstall behavior — and `tests/test-crash-dialogs.sh`, which stubs `launchctl`/`defaults`
+   lock-first, simultaneous sensor changes, the 20% battery cutoff in every lid position, closed-lid idle
+   sleep and the `pmset -g assertions` parser, the `caffeinate` assertion release, daemon restart, and
+   install/uninstall behavior — `tests/test-agent-hold.sh`, which drives the turn-scoped hooks, their
+   registration in a settings file, and the wrappers `setup.sh` writes around them — and
+   `tests/test-crash-dialogs.sh`, which stubs `launchctl`/`defaults`
    to exercise off/on/status, idempotency, the root guard, and the case where `launchctl disable`
    silently fails.
 
 4. **Report.** State plainly:
    - It applies to **new** sessions — open a new terminal or run `exec $SHELL`; the current one is unchanged.
    - **For order-aware lid behavior**, run `lidawake smart-on` once in a normal terminal. Closing the lid
-     while unlocked keeps the Mac and its agents running; pressing Touch ID/power to lock while the lid is
+     while unlocked keeps the Mac and its agents running until the work is done: once nothing has needed
+     the Mac awake for five minutes (no agent turn running, the Claude app has let go of its keep-awake, no
+     `awake` command or audio), it sleeps, at any charge. Claude Code and Codex hold the Mac only while a
+     turn runs, through hooks `setup.sh` registers in `~/.claude/settings.json` and `~/.codex/hooks.json`.
+     **Codex skips untrusted hooks**, so tell the user to open `codex` once and approve them in `/hooks`.
+     `lidawake status` shows what is keeping a closed lid awake right now.
+     Pressing Touch ID/power to lock while the lid is
      open arms normal sleep, so closing it afterward sleeps immediately. If a keep-awake session runs on
      battery and reaches 20% — **lid open or closed** — the daemon restores normal sleep and releases the
-     `caffeinate` assertions held by the `claude`/`codex`/`awake` wrappers (the wrapped sessions keep
-     running). A closed lid is put to sleep immediately; an open one is never forced, so a Mac in use
+     `caffeinate` assertions held by the agent hooks and `awake` (the sessions keep running). A closed lid is put to sleep immediately; an open one is never forced, so a Mac in use
      keeps working and sleeps normally on idle or when the lid closes. Once charging resumes or the battery recovers above the
      cutoff, those holds are re-armed so the surviving sessions prevent idle sleep again. AC power never
      triggers the cutoff at any charge. If battery status cannot be read three consecutive times, it
@@ -109,8 +116,8 @@ blocks and marker names) — never hand-append without the marker blocks, or re-
 - **agent-yes auto-approves tool prompts, and auto mode skips many of them entirely** — both are trust decisions. If the user doesn't want unattended approvals, install the defaults block but skip the agent-yes wrapper (or drop `--permission-mode auto` from it and keep the ultracode flag).
 - **agent-yes runs on Bun.** Its `ay` binary starts with `#!/usr/bin/env bun`, so without Bun on PATH the `claude` wrapper dies at `env: bun: No such file or directory` (the package's `engines` claims `node>=22`, but the shipped entry is a Bun script). `setup.sh` installs Bun user-local (`~/.bun`, no sudo) and can also install agent-yes itself via `bun install -g` when npm is missing. Bypass the wrapper anytime with `command claude`.
 - **Keep-awake is macOS-only** (`caffeinate`, `ioreg`, `launchd`, `pmset`). On other platforms skip block 4; the model/effort/agent-yes parts still apply.
-- **`lidawake smart-on` intentionally keeps an unlocked, lid-closed Mac awake.** Prefer AC power and do not place it in a bag in that state: it can run hot and drain the battery. Lock before closing whenever you want normal sleep. As a last-resort battery guard, a Mac on battery automatically restores sleep at 20% in any lid position, releasing the `caffeinate` assertions that would otherwise keep it awake; an AC-powered Mac is unaffected. Sensor-read errors and ambiguous post-boot states fail safe by restoring normal sleep.
-- **Smart mode pre-arms `disablesleep 1` while the lid is open and the session is unlocked.** This is necessary to beat immediate clamshell sleep, so ordinary system sleep is also suppressed in that state; the automatic `caffeinate` wrappers still handle agent-specific idle assertions. A bare `lidawake` is read-only and shows status.
+- **`lidawake smart-on` intentionally keeps an unlocked, lid-closed Mac awake while work is in progress**, and lets it sleep five minutes after the last of it ends (`SMART_LID_IDLE_SLEEP_SECONDS`, 0 to disable). Prefer AC power and do not place it in a bag while work is running: it can run hot and drain the battery. A background job that outlives an agent's turn is not covered by the turn's hold, so run it with `awake`. Lock before closing whenever you want normal sleep straight away. As a last-resort battery guard, a Mac on battery automatically restores sleep at 20% in any lid position, releasing the `caffeinate` assertions that would otherwise keep it awake; an AC-powered Mac is unaffected. Sensor-read errors and ambiguous post-boot states fail safe by restoring normal sleep.
+- **Smart mode pre-arms `disablesleep 1` while the lid is open and the session is unlocked.** This is necessary to beat immediate clamshell sleep, so ordinary system sleep is also suppressed in that state; the agent-hold hooks and `awake` still take the idle assertions that matter once the lid is closed. A bare `lidawake` is read-only and shows status.
 - **`lidawake on` is the legacy global override** and disables sleep until `lidawake off`; do not combine it with smart mode.
 - **Crash dialogs are a symptom, not a fault.** Agent tooling launches short-lived headless Chrome processes (Codex/Claude Code plugins rendering PDFs, browser automation); they abort during startup with a stack ending in `TransformProcessType` → `_RegisterApplication` → `abort()`, and each abort raises a modal alert — often five or ten in a row. The browser the user is actually *using* is a separate long-lived process and is untouched, which is why dismissing the dialogs costs nothing. Never propose reinstalling Chrome or clearing its profile for this.
 - **Apple's documented crash-dialog switch does not work on macOS 26.x.** `defaults write com.apple.CrashReporter DialogType none` reads back correctly from *both* the user and `-currentHost` domains and the dialog still appears (verified on 26.5 / build 25F84 with controlled test crashes). The mechanism that works is disabling the per-user `com.apple.ReportCrash` **agent**, which is what presents the alert. `crashdialogs off` does that and also sets the legacy preference, which is still sufficient on older macOS and inert where it is not.

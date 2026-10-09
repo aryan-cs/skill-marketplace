@@ -394,6 +394,57 @@ out="$(printf '0 0\nbad bad\n1 1\n' | SMART_LID_STATE_FILE="$TMP/state-invalid" 
 assert_line "$out" 2 "phase=failsafe disablesleep=0 sleepnow=0"
 assert_line "$out" 3 "phase=failsafe disablesleep=0 sleepnow=1"
 
+echo "== a closed lid sleeps once nothing has needed the Mac awake for the idle window =="
+# Input: LOCKED CLOSED SOURCE PERCENT ACTIVITY; each line is 60 simulated seconds.
+idle_env=(SMART_LID_IDLE_SLEEP_SECONDS=300 SMART_LID_ACTIVITY_CHECK_SECONDS=30)
+out="$(printf '0 0 ac 100 busy\n0 1 ac 100 busy\n1 1 ac 100 busy\n1 1 ac 100 idle\n1 1 ac 100 idle\n1 1 ac 100 idle\n1 1 ac 100 idle\n1 1 ac 100 idle\n1 1 ac 100 idle\n' | \
+  env "${idle_env[@]}" SMART_LID_STATE_FILE="$TMP/state-idle" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 3 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+assert_line "$out" 8 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+assert_line "$out" 9 "phase=closed-idle-sleep disablesleep=0 sleepnow=1"
+
+echo "== work resuming restarts the idle window =="
+out="$(printf '0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 busy\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n' | \
+  env "${idle_env[@]}" SMART_LID_STATE_FILE="$TMP/state-idle-resume" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 4 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+assert_line "$out" 7 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+assert_line "$out" 8 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+out="$(printf '0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 busy\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n' | \
+  env "${idle_env[@]}" SMART_LID_STATE_FILE="$TMP/state-idle-resume2" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 10 "phase=closed-idle-sleep disablesleep=0 sleepnow=1"
+
+echo "== an unreadable activity sample never sleeps a working Mac =="
+out="$(printf '0 1 ac 100 idle\n0 1 ac 100 unknown\n0 1 ac 100 unknown\n0 1 ac 100 unknown\n0 1 ac 100 unknown\n0 1 ac 100 unknown\n0 1 ac 100 unknown\n0 1 ac 100 unknown\n' | \
+  env "${idle_env[@]}" SMART_LID_STATE_FILE="$TMP/state-idle-unknown" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 8 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+
+echo "== idle sleep: a late lock keeps it pending, opening the lid ends it, 0 disables it =="
+out="$(printf '0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n1 1 ac 100 idle\n1 0 ac 100 idle\n0 0 ac 100 idle\n' | \
+  env "${idle_env[@]}" SMART_LID_STATE_FILE="$TMP/state-idle-lock" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 6 "phase=closed-idle-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 7 "phase=closed-idle-sleep disablesleep=0 sleepnow=1"
+assert_line "$out" 8 "phase=locked-open disablesleep=0 sleepnow=0"
+assert_line "$out" 9 "phase=unlocked-open disablesleep=1 sleepnow=0"
+out="$(printf '0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n' | \
+  SMART_LID_IDLE_SLEEP_SECONDS=0 SMART_LID_STATE_FILE="$TMP/state-idle-off" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 7 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+# Lines without the activity column (every other test here) never trip it.
+out="$(printf '0 1\n0 1\n0 1\n0 1\n0 1\n0 1\n0 1\n' | env "${idle_env[@]}" \
+  SMART_LID_STATE_FILE="$TMP/state-idle-nocolumn" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 7 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+
+echo "== the low-battery cutoff still wins while idle-timing a closed lid =="
+out="$(printf '0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 battery 15 idle\n' | \
+  env "${idle_env[@]}" SMART_LID_STATE_FILE="$TMP/state-idle-battery" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 3 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+
+echo "== a daemon restart re-earns a pending idle sleep instead of replaying it =="
+state="$TMP/state-idle-restart"
+printf 'phase=closed-idle-sleep\nprev_locked=1\nprev_closed=1\ndesired=0\n' > "$state"
+out="$(printf '1 1 ac 100 busy\n' | env "${idle_env[@]}" SMART_LID_STATE_FILE="$state" \
+  SMART_LID_SIMULATION_KEEP_STATE=1 "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 1 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+
 echo "== daemon restart preserves an active close-first session =="
 state="$TMP/state-d"
 printf 'phase=closed-keep-awake\nprev_locked=1\nprev_closed=1\ndesired=1\n' > "$state"
@@ -434,7 +485,9 @@ state="${FAKE_PMSET_STATE:?}"
 log="${FAKE_PMSET_LOG:?}"
 case "${1:-}" in
   -g)
-    if [ "${2:-}" = "batt" ]; then
+    if [ "${2:-}" = "assertions" ]; then
+      if [ -n "${FAKE_PMSET_ASSERTIONS:-}" ]; then cat "$FAKE_PMSET_ASSERTIONS"; else exit 1; fi
+    elif [ "${2:-}" = "batt" ]; then
       power_source="${FAKE_PMSET_POWER_SOURCE:-AC Power}"
       battery_percent="${FAKE_PMSET_BATTERY_PERCENT:-100}"
       battery_state="charging"
@@ -600,6 +653,92 @@ if ! grep -q 'sleepnow' "$TMP/pmset-log-daemon-low-battery"; then
 fi
 assert_line "$low_battery_actions" 1 "-a disablesleep 0"
 assert_line "$low_battery_actions" 2 "sleepnow"
+
+echo "== status reads activity from pmset assertions and HID idle time =="
+# Shaped like real `pmset -g assertions` output, including an owner with spaces.
+cat > "$TMP/assertions-idle" <<'TXT'
+Assertion status system-wide:
+   PreventUserIdleSystemSleep     1
+Listed by owning process:
+   pid 550(powerd): [0x0005d59400018722] 00:01:00 PreventUserIdleSystemSleep named: "Powerd - Prevent sleep while hibernating"
+   pid 1054(sharingd): [0x0005d5c000018772] 00:00:10 PreventUserIdleSystemSleep named: "Handoff"
+   pid 5597(CurseForge): [0x0005f9760005a29d] 00:00:20 NoDisplaySleepAssertion named: "Video Wake Lock"
+No kernel assertions.
+TXT
+{ sed '$d' "$TMP/assertions-idle"
+  printf '   pid 61987(Claude): [0x0004bd0c0001a1b4] 01:02:03 NoIdleSleepAssertion named: "Electron"  \n'
+  printf 'No kernel assertions.\n'; } > "$TMP/assertions-claude"
+{ sed '$d' "$TMP/assertions-idle"
+  printf '   pid 4242(Google Chrome Helper): [0x1] 00:00:05 PreventUserIdleSystemSleep named: "Playing audio"  \n'
+  printf 'No kernel assertions.\n'; } > "$TMP/assertions-spaces"
+{ sed '$d' "$TMP/assertions-idle"
+  printf '   pid 550(powerd): [0x2] 00:10:00 PreventUserIdleSystemSleep named: "Powerd - Prevent sleep while display is on"  \n'
+  printf 'No kernel assertions.\n'; } > "$TMP/assertions-display"
+activity_of() {   # activity_of <assertions file or ""> [ioreg]
+  printf '1\n' > "$TMP/pmset-state-activity"
+  SMART_LID_IOREG="${2:-$fake_ioreg_closed}" SMART_LID_PMSET="$fake_pmset" \
+    FAKE_PMSET_STATE="$TMP/pmset-state-activity" FAKE_PMSET_LOG="$TMP/pmset-log-activity" \
+    FAKE_PMSET_ASSERTIONS="$1" SMART_LID_STATE_FILE="$TMP/state-activity" "$DAEMON" status \
+    | sed -n 's/^activity=//p'
+}
+[ "$(activity_of "$TMP/assertions-idle")" = "idle" ] \
+  || fail "powerd, Handoff and display-only wake locks are not work: $(activity_of "$TMP/assertions-idle")"
+[ "$(activity_of "$TMP/assertions-claude")" = "busy: Claude (Electron)" ] \
+  || fail "the Claude app's keep-awake is work: $(activity_of "$TMP/assertions-claude")"
+[ "$(activity_of "$TMP/assertions-spaces")" = "busy: Google Chrome Helper (Playing audio)" ] \
+  || fail "owner names with spaces: $(activity_of "$TMP/assertions-spaces")"
+case "$(activity_of "$TMP/assertions-display")" in
+  "busy: powerd (Powerd - Prevent sleep while display is on)") ;;
+  *) fail "a lit display with the lid shut (external monitor) is in use: $(activity_of "$TMP/assertions-display")" ;;
+esac
+[ "$(activity_of "")" = "unknown" ] || fail "an unreadable pmset must report unknown"
+fake_ioreg_input="$TMP/fake-ioreg-input"
+cat > "$fake_ioreg_input" <<'SH'
+#!/bin/bash
+case "$*" in
+  *IOHIDSystem*) printf '    "HIDIdleTime" = 2000000000\n' ;;
+  *) printf '  "IOConsoleLocked" = No\n  "AppleClamshellState" = Yes\n' ;;
+esac
+SH
+chmod +x "$fake_ioreg_input"
+[ "$(activity_of "$TMP/assertions-idle" "$fake_ioreg_input")" = "busy: recent keyboard or trackpad input" ] \
+  || fail "input two seconds ago (clamshell with a keyboard) is work"
+
+echo "== daemon loop: an idle closed lid restores sleep and requests it =="
+printf '1\n' > "$TMP/pmset-state-daemon-idle"
+: > "$TMP/pmset-log-daemon-idle"
+SMART_LID_ALLOW_NONROOT_TEST=1 SMART_LID_IOREG="$fake_ioreg_closed" \
+  SMART_LID_PMSET="$fake_pmset" FAKE_PMSET_STATE="$TMP/pmset-state-daemon-idle" \
+  FAKE_PMSET_LOG="$TMP/pmset-log-daemon-idle" FAKE_PMSET_ASSERTIONS="$TMP/assertions-idle" \
+  SMART_LID_IDLE_SLEEP_SECONDS=1 SMART_LID_ACTIVITY_CHECK_SECONDS=1 \
+  SMART_LID_STATE_FILE="$TMP/state-daemon-idle" SMART_LID_INTERVAL=0.05 "$DAEMON" run >/dev/null 2>&1 &
+idle_daemon_pid=$!
+track_pid "$idle_daemon_pid"
+for _ in $(seq 1 100); do
+  grep -q '^sleepnow$' "$TMP/pmset-log-daemon-idle" && break
+  kill -0 "$idle_daemon_pid" 2>/dev/null || fail "idle daemon exited before requesting sleep"
+  sleep 0.05
+done
+kill -TERM "$idle_daemon_pid"
+wait "$idle_daemon_pid" || fail "idle daemon did not exit cleanly"
+untrack_pid "$idle_daemon_pid"
+grep -q '^sleepnow$' "$TMP/pmset-log-daemon-idle" || fail "an idle closed lid never requested sleep"
+grep -q -- '-a disablesleep 0' "$TMP/pmset-log-daemon-idle" || fail "idle sleep did not restore disablesleep=0"
+# ...and a busy one does not, over the same window.
+printf '1\n' > "$TMP/pmset-state-daemon-busy"
+: > "$TMP/pmset-log-daemon-busy"
+SMART_LID_ALLOW_NONROOT_TEST=1 SMART_LID_IOREG="$fake_ioreg_closed" \
+  SMART_LID_PMSET="$fake_pmset" FAKE_PMSET_STATE="$TMP/pmset-state-daemon-busy" \
+  FAKE_PMSET_LOG="$TMP/pmset-log-daemon-busy" FAKE_PMSET_ASSERTIONS="$TMP/assertions-claude" \
+  SMART_LID_IDLE_SLEEP_SECONDS=1 SMART_LID_ACTIVITY_CHECK_SECONDS=1 \
+  SMART_LID_STATE_FILE="$TMP/state-daemon-busy" SMART_LID_INTERVAL=0.05 "$DAEMON" run >/dev/null 2>&1 &
+busy_daemon_pid=$!
+track_pid "$busy_daemon_pid"
+sleep 3
+kill -TERM "$busy_daemon_pid"
+wait "$busy_daemon_pid" || fail "busy daemon did not exit cleanly"
+untrack_pid "$busy_daemon_pid"
+if grep -q 'sleepnow' "$TMP/pmset-log-daemon-busy"; then fail "slept a closed lid that was still doing work"; fi
 
 echo "== persistent battery telemetry failure restores normal sleep =="
 printf '1\n' > "$TMP/pmset-state-daemon-battery-unavailable"
