@@ -296,8 +296,11 @@ PID drops the assertion while the wrapped command keeps running. The daemon sign
 individually and never a process group, since signalling the group would take the session down with it. Set
 `SMART_LID_RELEASE_CAFFEINATE=0` to disable this.
 
-Once the Mac is back on AC or above the cutoff, the safety state is released and normal lid behavior resumes
-without needing another lid event. The released `caffeinate` holds are **re-armed** at that point, so a session
+Once the Mac is back on AC, or on battery more than 5 points above the cutoff, the safety state is released and
+normal lid behavior resumes without needing another lid event. The margin is hysteresis: a reading that
+flickers around the cutoff (20, 21, 20, ...) would otherwise release the latch, re-arm keep-awake and the
+`caffeinate` holds, and trip again at the next check. AC releases it at any charge, and `battery-unavailable-sleep`
+(a telemetry problem, not a charge one) is released as soon as a reading is above the cutoff. The released `caffeinate` holds are **re-armed** at that point, so a session
 that survived the cutoff goes back to preventing idle sleep rather than being left unprotected for the rest of
 its life. Each is restored with `caffeinate -dimsu -w PID`, which asserts on behalf of the wrapped command and
 exits by itself when that command does — so a session that ended in the meantime is skipped rather than leaking
@@ -309,7 +312,9 @@ than waiting a minute; after three consecutive failures the daemon enters `batte
 conservatively restores normal sleep, because it can no longer enforce the cutoff reliably. As with the cutoff,
 `sleepnow` is requested only when the lid is closed.
 
-The cutoff defaults to 20% and is configurable with `SMART_LID_LOW_BATTERY_PERCENT`.
+The cutoff defaults to 20% and is configurable with `SMART_LID_LOW_BATTERY_PERCENT`; the recovery margin
+defaults to 5 points and is configurable with `SMART_LID_RECOVERY_MARGIN_PERCENT` (0 restores release just
+above the cutoff; the two together may not exceed 100).
 
 ### Sleeping once the work is done
 

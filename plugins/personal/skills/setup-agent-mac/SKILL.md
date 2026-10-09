@@ -77,8 +77,8 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
      open arms normal sleep, so closing it afterward sleeps immediately. If a keep-awake session runs on
      battery and reaches 20% — **lid open or closed** — the daemon restores normal sleep and releases the
      `caffeinate` assertions held by the agent hooks and `awake` (the sessions keep running). A closed lid is put to sleep immediately; an open one is never forced, so a Mac in use
-     keeps working and sleeps normally on idle or when the lid closes. Once charging resumes or the battery recovers above the
-     cutoff, those holds are re-armed so the surviving sessions prevent idle sleep again. AC power never
+     keeps working and sleeps normally on idle or when the lid closes. Once charging resumes or the battery recovers 5 points above the
+     cutoff (the margin keeps a reading flickering around 20% from re-arming keep-awake), those holds are re-armed so the surviving sessions prevent idle sleep again. AC power never
      triggers the cutoff at any charge. If battery status cannot be read three consecutive times, it
      conservatively restores sleep rather than running without a working guard.
      Inspect the lid, power source, percentage, and cutoff with `lidawake status`, and fully revert with

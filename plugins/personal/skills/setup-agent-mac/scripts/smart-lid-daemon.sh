@@ -18,6 +18,10 @@ BATTERY_CHECK_LOOPS="${SMART_LID_BATTERY_CHECK_LOOPS:-600}"
 BATTERY_RETRY_LOOPS="${SMART_LID_BATTERY_RETRY_LOOPS:-50}"
 BATTERY_FAILURE_LIMIT="${SMART_LID_BATTERY_FAILURE_LIMIT:-3}"
 LOW_BATTERY_PERCENT="${SMART_LID_LOW_BATTERY_PERCENT:-20}"
+# On battery, a low-battery latch is released only once the charge is this many
+# points above the cutoff, so a reading that flickers around it (20, 21, 20, ...)
+# cannot re-arm keep-awake between samples. AC power releases it at any charge.
+RECOVERY_MARGIN_PERCENT="${SMART_LID_RECOVERY_MARGIN_PERCENT:-5}"
 # A close-first session exists so work can finish with the lid shut. Once nothing
 # has needed the Mac awake for IDLE_SLEEP_SECONDS (0 disables this), it sleeps as
 # an open Mac would on idle. Activity is sampled every ACTIVITY_CHECK_SECONDS.
@@ -82,6 +86,10 @@ validate_positive_integer SMART_LID_BATTERY_FAILURE_LIMIT "$BATTERY_FAILURE_LIMI
 validate_positive_integer SMART_LID_LOW_BATTERY_PERCENT "$LOW_BATTERY_PERCENT"
 [ "$LOW_BATTERY_PERCENT" -le 100 ] \
   || { echo "SMART_LID_LOW_BATTERY_PERCENT must be between 1 and 100" >&2; exit 64; }
+[ "$RECOVERY_MARGIN_PERCENT" = 0 ] \
+  || validate_positive_integer SMART_LID_RECOVERY_MARGIN_PERCENT "$RECOVERY_MARGIN_PERCENT"
+[ $((LOW_BATTERY_PERCENT + RECOVERY_MARGIN_PERCENT)) -le 100 ] \
+  || { echo "SMART_LID_LOW_BATTERY_PERCENT plus SMART_LID_RECOVERY_MARGIN_PERCENT must not exceed 100" >&2; exit 64; }
 validate_nonnegative_integer SMART_LID_IDLE_SLEEP_SECONDS "$IDLE_SLEEP_SECONDS"
 validate_positive_integer SMART_LID_ACTIVITY_CHECK_SECONDS "$ACTIVITY_CHECK_SECONDS"
 validate_positive_integer SMART_LID_SIMULATION_STEP_SECONDS "$SIMULATION_STEP_SECONDS"
@@ -306,7 +314,7 @@ transition_state() {
     local battery_status
     if [ "$prev_closed" != "$closed" ] \
       && battery_status="$(read_battery_status)" \
-      && battery_recovered "$battery_status"; then
+      && battery_releases_latch "$battery_status"; then
       # Fall through to the ordinary lid transition below; prev_* still holds
       # the previous sample, so the lock-before-close ordering is preserved.
       release_battery_latch "$battery_status"
@@ -473,9 +481,19 @@ request_battery_sleep() {
 
 # True when a battery sample ("SOURCE PERCENT") shows AC power or a charge
 # above the cutoff.
-battery_recovered() {
+battery_above_cutoff() {
   local power_source="${1%% *}" battery_percent="${1#* }"
   [ "$power_source" != "battery" ] || [ "$battery_percent" -gt "$LOW_BATTERY_PERCENT" ]
+}
+
+# True when a sample releases the current battery latch: AC power, or a charge
+# above the cutoff -- for a low-battery latch, above it by the recovery margin,
+# so a reading that flickers around the cutoff cannot release it. A
+# battery-unavailable latch is about telemetry, not charge, and needs no margin.
+battery_releases_latch() {
+  local power_source="${1%% *}" battery_percent="${1#* }" floor="$LOW_BATTERY_PERCENT"
+  [ "$phase" != "low-battery-sleep" ] || floor=$((LOW_BATTERY_PERCENT + RECOVERY_MARGIN_PERCENT))
+  [ "$power_source" != "battery" ] || [ "$battery_percent" -gt "$floor" ]
 }
 
 # Leave a battery safety state: normal lid behavior resumes and the caffeinate
@@ -554,15 +572,18 @@ enforce_low_battery_sleep() {
   battery_read_failures=0
   battery_percent="${battery_status#* }"
 
-  # Back on AC, or recovered above the cutoff: release a latched safety state so
-  # normal lid behaviour resumes without needing another lid event.
-  if battery_recovered "$battery_status"; then
-    if [ "$latched" = 1 ]; then
-      release_battery_latch "$battery_status"
-      # The latch does not record the lid phase, so re-derive it from the sensors.
-      prev_locked=""
-      prev_closed=""
-    fi
+  # Back on AC, or recovered clear of the cutoff: release a latched safety state
+  # so normal lid behaviour resumes without needing another lid event.
+  if [ "$latched" = 1 ] && battery_releases_latch "$battery_status"; then
+    release_battery_latch "$battery_status"
+    # The latch does not record the lid phase, so re-derive it from the sensors.
+    prev_locked=""
+    prev_closed=""
+    return 0
+  fi
+  # Above the cutoff there is nothing to enforce. A low-battery latch that is
+  # still inside the recovery margin stays held (transition_state keeps desired=0).
+  if battery_above_cutoff "$battery_status"; then
     return 0
   fi
 

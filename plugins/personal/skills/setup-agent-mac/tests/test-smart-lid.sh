@@ -133,6 +133,42 @@ assert_line "$out" 1 "phase=low-battery-sleep disablesleep=0 sleepnow=0"
 assert_line "$out" 2 "phase=battery-recovered"
 assert_line "$out" 3 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
 
+echo "== on battery, a reading flickering around the cutoff does not release the latch =="
+# Releasing at 21% re-armed keep-awake (disablesleep=1, caffeinate holds) for up to a
+# minute before the next check re-tripped at 20%. The latch now needs the recovery
+# margin (default 5): above 25% on battery, or AC at any charge.
+out="$(printf '0 0 battery 20\n0 0 battery 21\n0 0 battery 20\n0 0 battery 25\n0 0 battery 26\n' | \
+  SMART_LID_STATE_FILE="$TMP/state-hysteresis" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 2 "phase=low-battery-sleep disablesleep=0 sleepnow=0"
+assert_line "$out" 3 "phase=low-battery-sleep disablesleep=0 sleepnow=0"
+assert_line "$out" 4 "phase=low-battery-sleep disablesleep=0 sleepnow=0"
+assert_line "$out" 5 "phase=battery-recovered"
+out="$(printf '0 0 battery 20\n0 0 ac 19\n' | \
+  SMART_LID_STATE_FILE="$TMP/state-hysteresis-ac" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 2 "phase=battery-recovered"
+# A margin of 0 is the previous behavior.
+out="$(printf '0 0 battery 20\n0 0 battery 21\n' | SMART_LID_RECOVERY_MARGIN_PERCENT=0 \
+  SMART_LID_STATE_FILE="$TMP/state-hysteresis-zero" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 2 "phase=battery-recovered"
+# The lid-event fast path applies the same margin: closing the lid at 22% still sleeps.
+out="$(printf '0 0 battery 20\n0 1 battery 22\n' | \
+  SMART_LID_STATE_FILE="$TMP/state-hysteresis-lid" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 2 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+out="$(printf '0 0 battery 20\n0 1 battery 26\n' | \
+  SMART_LID_STATE_FILE="$TMP/state-hysteresis-lid-clear" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+# Entering the latch is unchanged: inside the margin but above the cutoff is not low.
+out="$(printf '0 1 battery 30\n0 1 battery 22\n' | \
+  SMART_LID_STATE_FILE="$TMP/state-hysteresis-entry" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+# battery-unavailable-sleep is about telemetry, not charge: it releases above the cutoff.
+out="$(printf '0 1 battery 50\n0 1 bad 0\n0 1 bad 0\n0 1 bad 0\n0 1 battery 22\n' | \
+  SMART_LID_BATTERY_CHECK_LOOPS=1 SMART_LID_BATTERY_RETRY_LOOPS=1 SMART_LID_BATTERY_FAILURE_LIMIT=3 \
+  SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL=1 \
+  SMART_LID_STATE_FILE="$TMP/state-hysteresis-unavailable" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 4 "phase=battery-unavailable-sleep"
+assert_line "$out" 5 "phase=battery-recovered"
+
 echo "== periodic battery checks are throttled between samples =="
 # The first three samples are above the cutoff; the drop to 20% is only observed
 # once the throttle interval elapses.
@@ -387,6 +423,12 @@ if SMART_LID_BATTERY_RETRY_LOOPS=0 "$DAEMON" status >/dev/null 2>&1; then
 fi
 if SMART_LID_BATTERY_FAILURE_LIMIT=03 "$DAEMON" status >/dev/null 2>&1; then
   fail "leading-zero battery failure limit was accepted"
+fi
+if SMART_LID_RECOVERY_MARGIN_PERCENT=05 "$DAEMON" status >/dev/null 2>&1; then
+  fail "leading-zero recovery margin was accepted"
+fi
+if SMART_LID_RECOVERY_MARGIN_PERCENT=81 "$DAEMON" status >/dev/null 2>&1; then
+  fail "a recovery margin above 100% minus the cutoff was accepted"
 fi
 
 echo "== invalid sensor input fails safe and recovery reinitializes without stale ordering =="
