@@ -34,6 +34,21 @@ service_running() {
   "$LAUNCHCTL" print "system/$LABEL" 2>/dev/null | /usr/bin/grep -q 'state = running'
 }
 
+# bootout tears the service down asynchronously and returns non-zero if it was
+# already gone, so neither its exit status nor a single immediate check is a
+# reliable signal. Poll for the service to disappear, the same way the startup
+# verification polls for it to appear. Fails if it is still loaded afterwards.
+unload_service() {
+  "$LAUNCHCTL" bootout "system/$LABEL" >/dev/null 2>&1 || true
+  local attempt=0
+  while service_loaded; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt "$VERIFY_ATTEMPTS" ] || return 1
+    "$SLEEP_BIN" "$VERIFY_DELAY"
+  done
+  return 0
+}
+
 write_plist() {
   local destination="$1" tmp
   tmp="$(mktemp "${TMPDIR:-/tmp}/smart-lid-plist.XXXXXX")"
@@ -64,9 +79,12 @@ PLIST
 
 install_daemon() {
   require_root install
-  local daemon_new="${DAEMON_DEST}.new.$$" plist_new="${PLIST_DEST}.new.$$"
-  local daemon_backup="${DAEMON_DEST}.backup.$$" plist_backup="${PLIST_DEST}.backup.$$"
-  local had_daemon=0 had_plist=0 was_loaded=0 transaction_active=0 committed=0
+  # NOT `local`: rollback_install() runs from the EXIT trap, which fires after this
+  # function has already returned. Locals would be out of scope by then and `set -u`
+  # would abort the rollback on the first reference instead of restoring the service.
+  daemon_new="${DAEMON_DEST}.new.$$" plist_new="${PLIST_DEST}.new.$$"
+  daemon_backup="${DAEMON_DEST}.backup.$$" plist_backup="${PLIST_DEST}.backup.$$"
+  had_daemon=0 had_plist=0 was_loaded=0 transaction_active=0 committed=0
   mkdir -p "$(dirname "$DAEMON_DEST")" "$(dirname "$PLIST_DEST")" "$(dirname "$STATE_FILE")"
   /bin/bash -n "$SCRIPT_DIR/smart-lid-daemon.sh"
   "$INSTALL" -m 0755 "$SCRIPT_DIR/smart-lid-daemon.sh" "$daemon_new"
@@ -83,15 +101,24 @@ install_daemon() {
     transaction_active=1
     rollback_install() {
       local result=$?
-      trap - EXIT HUP INT TERM
+      trap - EXIT
+      # Rolling back now waits on launchd, so a Ctrl-C must not abort it halfway.
+      trap '' HUP INT TERM
       if [ "$transaction_active" = 1 ] && [ "$committed" = 0 ]; then
         echo "Install failed; rolling back the previous smart-lid service." >&2
-        "$LAUNCHCTL" bootout "system/$LABEL" >/dev/null 2>&1 || true
-        rm -f "$DAEMON_DEST" "$PLIST_DEST"
-        if [ "$had_daemon" = 1 ]; then mv "$daemon_backup" "$DAEMON_DEST"; fi
-        if [ "$had_plist" = 1 ]; then mv "$plist_backup" "$PLIST_DEST"; fi
-        if [ "$was_loaded" = 1 ] && [ "$had_plist" = 1 ]; then
-          "$LAUNCHCTL" bootstrap system "$PLIST_DEST" >/dev/null 2>&1 || true
+        # Wait for the teardown to land: bootstrapping the previous service while
+        # the label is still loaded fails, leaving no service once teardown ends.
+        if unload_service; then
+          rm -f "$DAEMON_DEST" "$PLIST_DEST"
+          if [ "$had_daemon" = 1 ]; then mv "$daemon_backup" "$DAEMON_DEST"; fi
+          if [ "$had_plist" = 1 ]; then mv "$plist_backup" "$PLIST_DEST"; fi
+          if [ "$was_loaded" = 1 ] && [ "$had_plist" = 1 ]; then
+            "$LAUNCHCTL" bootstrap system "$PLIST_DEST" >/dev/null 2>&1 \
+              || echo "WARNING: could not restart the previous smart-lid service; run: sudo launchctl bootstrap system $PLIST_DEST" >&2
+          fi
+        else
+          # Like uninstall, never remove the files of a job that is still loaded.
+          echo "WARNING: the smart-lid service did not unload during rollback, so its files were left in place; check it with: sudo launchctl print system/$LABEL" >&2
         fi
         "$PMSET" -a disablesleep 0 >/dev/null 2>&1 || true
       fi
@@ -101,12 +128,9 @@ install_daemon() {
     trap rollback_install EXIT
     trap 'exit 130' HUP INT TERM
 
-    if [ "$was_loaded" = 1 ]; then
-      "$LAUNCHCTL" bootout "system/$LABEL"
-      if service_loaded; then
-        echo "Could not unload the existing smart-lid service." >&2
-        return 1
-      fi
+    if [ "$was_loaded" = 1 ] && ! unload_service; then
+      echo "Could not unload the existing smart-lid service." >&2
+      return 1
     fi
     mv "$daemon_new" "$DAEMON_DEST"
     mv "$plist_new" "$PLIST_DEST"
@@ -137,12 +161,9 @@ install_daemon() {
 uninstall_daemon() {
   require_root uninstall
   if [ -z "$TEST_ROOT" ] || [ "$TEST_LIFECYCLE" = 1 ]; then
-    if service_loaded; then
-      "$LAUNCHCTL" bootout "system/$LABEL"
-      if service_loaded; then
-        echo "Refusing to remove files: the smart-lid service is still loaded." >&2
-        return 1
-      fi
+    if service_loaded && ! unload_service; then
+      echo "Refusing to remove files: the smart-lid service is still loaded." >&2
+      return 1
     fi
     "$PMSET" -a disablesleep 0
   fi
