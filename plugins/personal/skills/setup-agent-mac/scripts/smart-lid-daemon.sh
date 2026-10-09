@@ -217,11 +217,29 @@ transition_state() {
     return
   fi
 
+  if [ "$phase" = "low-battery-sleep" ] || [ "$phase" = "battery-unavailable-sleep" ]; then
+    # Keep battery safety states latched in any lid position, lid events
+    # included: reopening the lid must not re-arm keep-awake, or the guard trips
+    # again a minute later and sleeps the Mac under whoever just opened it.
+    # enforce_low_battery_sleep() re-evaluates each cycle and releases the latch
+    # once the machine is back on AC or above the cutoff.
+    desired=0
+    if [ "$closed" = 0 ]; then
+      # An open lid may mean someone is using the Mac: allow idle sleep, never
+      # force it.
+      request_sleep=0
+      sleep_reason=""
+    elif [ "$prev_closed" = 0 ]; then
+      request_sleep=1
+      sleep_reason="lid closed while the battery guard is active"
+    fi
+    # Otherwise the lid stayed closed: the automatic lock must not cancel a
+    # pending retry if `pmset sleepnow` failed.
   # Lid transition wins when both sensors change inside one polling interval.
   # A human lock-then-close sequence is observed as a lock transition first;
   # a close-first sequence can report closed+locked together because macOS may
   # lock the display as a consequence of closing it.
-  if [ "$prev_closed" = 0 ] && [ "$closed" = 1 ]; then
+  elif [ "$prev_closed" = 0 ] && [ "$closed" = 1 ]; then
     if [ "$prev_locked" = 0 ] && [ "$phase" != "locked-open" ]; then
       phase="closed-keep-awake"
       desired=1
@@ -239,12 +257,6 @@ transition_state() {
     else
       phase="unlocked-open"; desired=1; request_sleep=0; sleep_reason=""
     fi
-  elif [ "$phase" = "low-battery-sleep" ] || [ "$phase" = "battery-unavailable-sleep" ]; then
-    # Keep battery safety states latched in any lid position. In particular, the
-    # automatic lock must not cancel a pending retry if `pmset sleepnow` failed.
-    # enforce_low_battery_sleep() re-evaluates each cycle and releases the latch
-    # once the machine is back on AC or above the cutoff.
-    desired=0
   elif [ "$prev_locked" = 0 ] && [ "$locked" = 1 ]; then
     if [ "$closed" = 1 ] && [ "$phase" = "closed-keep-awake" ]; then
       # Ignore the automatic lock caused by a close-first keep-awake session.
@@ -321,6 +333,20 @@ restore_caffeinate_assertions() {
   log "restored $restored caffeinate sleep assertion(s) for still-running sessions"
 }
 
+# Entering a battery safety state always restores normal sleep (desired=0), but
+# only a closed lid is put to sleep on the spot. With the lid open someone may be
+# mid-task, so the Mac is left to sleep normally on idle or when the lid closes;
+# macOS's own critical-battery sleep still applies once disablesleep is cleared.
+request_battery_sleep() {
+  if [ "$prev_closed" = 1 ]; then
+    request_sleep=1
+    log "$sleep_reason; restoring normal sleep"
+  else
+    request_sleep=0
+    log "$sleep_reason; lid open, so keep-awake is off but sleep is not forced"
+  fi
+}
+
 enforce_low_battery_sleep() {
   local battery_status power_source battery_percent
   # The guard runs in every lid state. A long agent run on battery usually has
@@ -349,12 +375,17 @@ enforce_low_battery_sleep() {
     return 0
   fi
 
-  # While latched, sample every cycle: the throttle exists to avoid polling the
-  # battery during normal keep-awake, not to delay releasing a safety state.
-  if [ "$latched" != 1 ] \
-    && { [ "$simulation_mode" != 1 ] || [ "${SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL:-0}" = 1 ]; }; then
+  # While latched, sample on the short retry cadence (~5s) rather than the full
+  # interval, so plugging in releases the latch promptly. Not every cycle: with
+  # the lid open the latch can last as long as the remaining battery, and forking
+  # pmset ten times a second would spend that battery.
+  if [ "$simulation_mode" != 1 ] || [ "${SMART_LID_SIMULATION_RESPECT_BATTERY_INTERVAL:-0}" = 1 ]; then
+    local check_target="$battery_check_target"
+    if [ "$latched" = 1 ] && [ "$check_target" -gt "$BATTERY_RETRY_LOOPS" ]; then
+      check_target="$BATTERY_RETRY_LOOPS"
+    fi
     battery_check_count=$((battery_check_count + 1))
-    [ "$battery_check_count" -ge "$battery_check_target" ] || return 0
+    [ "$battery_check_count" -ge "$check_target" ] || return 0
   fi
 
   if ! battery_status="$(read_battery_status)"; then
@@ -366,9 +397,8 @@ enforce_low_battery_sleep() {
     if [ "$battery_read_failures" -ge "$BATTERY_FAILURE_LIMIT" ]; then
       if [ "$phase" != "battery-unavailable-sleep" ]; then
         phase="battery-unavailable-sleep"
-        request_sleep=1
         sleep_reason="battery status unavailable for ${battery_read_failures} consecutive checks"
-        log "$sleep_reason; restoring normal sleep"
+        request_battery_sleep
       fi
       desired=0
     fi
@@ -397,9 +427,8 @@ enforce_low_battery_sleep() {
 
   if [ "$phase" != "low-battery-sleep" ]; then
     phase="low-battery-sleep"
-    request_sleep=1
     sleep_reason="${battery_percent}% battery on battery power (cutoff ${LOW_BATTERY_PERCENT}%)"
-    log "$sleep_reason; restoring normal sleep"
+    request_battery_sleep
     # Clearing disablesleep is not sufficient on its own: the claude()/codex()/
     # awake() wrappers this skill installs run under `caffeinate -dimsu`, and -i
     # holds a PreventUserIdleSystemSleep assertion that pmset does not override.

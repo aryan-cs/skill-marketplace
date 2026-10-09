@@ -4,6 +4,14 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-08
+
+### Fixed
+- **`setup-agent-mac` smart-lid: the low-battery cutoff put the Mac to sleep in the middle of use.** The lid-open guard from [#9](https://github.com/aryan-cs/skill-marketplace/issues/9) took the closed-lid response along with it, so a Mac being used on battery called `pmset sleepnow` the moment it reached 20%. Handing sleep back to macOS (`disablesleep 0` plus the `caffeinate` release) was all that #9 needed; the forced sleep is now requested only when the lid is closed. An open-lid Mac keeps working and sleeps normally on idle or when the lid closes, and macOS's own critical-battery handling applies because `disablesleep` is no longer pinned. `battery-unavailable-sleep` follows the same rule.
+- **Reopening the lid at low battery re-armed keep-awake, then slept again about a minute later.** A lid transition replaced the `low-battery-sleep` latch with `unlocked-open` (`disablesleep 1`), and the next periodic battery check tripped the cutoff again. The latch is now checked before lid transitions: opening the lid keeps it without forcing sleep, closing it requests sleep at once, and it is still released only by AC power or recovery above the cutoff.
+- **A latched safety state forked `pmset -g batt` every 0.1 s.** With the lid open the latch can now last as long as the remaining battery, so it samples on the retry cadence (about every five seconds) instead.
+- `tests/test-smart-lid.sh`: the cases that asserted `sleepnow=1` for an open lid now assert the opposite, plus new cases for the latch surviving lid events, the latched sampling cadence, and an applied-`pmset` run with the lid open that must never log `sleepnow`.
+
 ## [0.13.0] - 2026-09-04
 
 ### Added
