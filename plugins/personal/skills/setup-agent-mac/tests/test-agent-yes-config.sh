@@ -28,7 +28,9 @@ fi
 # --- generate the config under test, exactly the way setup.sh does ----------------
 mkdir -p "$TMP/home"
 CC_SETUP_PROFILE="$TMP/rc" CC_AGENT_YES_CONFIG="$TMP/home/.agent-yes.config.yaml" \
-  AGENT_MAC_HOME="$TMP/payload" bash "$SKILL_DIR/scripts/setup.sh" >/dev/null 2>&1 || true
+  AGENT_MAC_HOME="$TMP/payload" CC_CLAUDE_SETTINGS="$TMP/home/.claude/settings.json" \
+  CC_CODEX_HOOKS="$TMP/home/.codex/hooks.json" \
+  bash "$SKILL_DIR/scripts/setup.sh" >/dev/null 2>&1 || true
 if [ ! -f "$TMP/home/.agent-yes.config.yaml" ]; then
   echo "  FAIL: setup.sh did not write the agent-yes config"; exit 1
 fi

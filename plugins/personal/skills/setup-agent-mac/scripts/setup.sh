@@ -138,16 +138,46 @@ else
   echo "  agent-yes: neither npm nor bun available — install Node.js or Bun, then re-run" >&2
 fi
 
-# --- 3. agent-yes wrapper function (caffeinate-wrapped so runs never idle-sleep) -----------
-# NOTE on the caffeinate branches: caffeinate execs its target via PATH, so `caffeinate ... claude`
-# runs the real binary, NOT this function (no recursion). The no-caffeinate fallbacks use
-# `command` to bypass the function. Order-aware lid behavior uses `lidawake smart-on` (see block 4).
-upsert_block "agent-yes" '# Route `claude` through agent-yes (auto-approves prompts), default to full ultracode
-# (`--effort ultracode` = xhigh effort + standing workflow orchestration) and auto mode
-# (`--permission-mode auto` = the classifier decides what runs without asking), and hold a caffeinate
-# assertion so a run never idle-sleeps. Pass your own --effort / --permission-mode to override (last wins);
-# bypass all of it with `command claude`.
-claude() {
+# --- 3. turn-scoped keep-awake hooks + the agent-yes wrapper ---------------------------------
+# Claude Code and Codex hold the Mac awake only while a turn runs: agent-hold.sh is registered
+# as a hook that takes a `caffeinate -i -w <agent>` assertion on UserPromptSubmit and drops it
+# when the turn ends. An open session idling at its prompt then holds nothing, so with the lid
+# closed the smart-lid daemon can let the Mac sleep once the work is done (reference.md).
+# The hooks are merged into the existing settings files by agent-hooks.js (JavaScript for
+# Automation, always present on macOS); other keys and hooks are left alone.
+mkdir -p "$AGENT_MAC_HOME"
+install -m 0755 "$SCRIPT_DIR/agent-hold.sh" "$AGENT_MAC_HOME/agent-hold.sh"
+install -m 0644 "$SCRIPT_DIR/agent-hooks.js" "$AGENT_MAC_HOME/agent-hooks.js"
+CLAUDE_SETTINGS="${CC_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+CODEX_HOOKS="${CC_CODEX_HOOKS:-$HOME/.codex/hooks.json}"
+register_hooks() {   # register_hooks <file> claude|codex
+  /usr/bin/osascript -l JavaScript "$AGENT_MAC_HOME/agent-hooks.js" install "$1" \
+    "$AGENT_MAC_HOME/agent-hold.sh" "$2" 2>&1 | sed 's/^/  agent-hold hooks: /'
+  return "${PIPESTATUS[0]}"
+}
+claude_hooks=0 codex_hooks=0
+if register_hooks "$CLAUDE_SETTINGS" claude; then claude_hooks=1; else
+  echo "  agent-hold hooks: could not update $CLAUDE_SETTINGS; claude() keeps a whole-session hold" >&2
+fi
+if command -v codex >/dev/null 2>&1 || [ -d "$(dirname "$CODEX_HOOKS")" ]; then
+  if register_hooks "$CODEX_HOOKS" codex; then codex_hooks=1; else
+    echo "  agent-hold hooks: could not update $CODEX_HOOKS; codex() keeps a whole-session hold" >&2
+  fi
+fi
+
+# NOTE on the caffeinate fallbacks: caffeinate execs its target via PATH, so `caffeinate ... claude`
+# runs the real binary, NOT this function (no recursion); the other branches use `command`.
+if [ "$claude_hooks" = 1 ]; then
+  CLAUDE_FN='claude() {
+  if command -v ay >/dev/null 2>&1; then
+    command ay claude -- --effort ultracode --permission-mode auto "$@"
+  else
+    command claude --effort ultracode --permission-mode auto "$@"
+  fi
+}'
+  CLAUDE_HOLD_NOTE='# The Mac is held awake per turn by the agent-hold hooks in ~/.claude/settings.json.'
+else
+  CLAUDE_FN='claude() {
   if command -v caffeinate >/dev/null 2>&1; then
     if command -v ay >/dev/null 2>&1; then
       caffeinate -dimsu ay claude -- --effort ultracode --permission-mode auto "$@"
@@ -162,6 +192,14 @@ claude() {
     fi
   fi
 }'
+  CLAUDE_HOLD_NOTE='# The agent-hold hooks could not be registered, so a caffeinate hold covers the whole session.'
+fi
+upsert_block "agent-yes" '# Route `claude` through agent-yes (auto-approves prompts), default to full ultracode
+# (`--effort ultracode` = xhigh effort + standing workflow orchestration) and auto mode
+# (`--permission-mode auto` = the classifier decides what runs without asking). Pass your own
+# --effort / --permission-mode to override (last wins); bypass all of it with `command claude`.
+'"$CLAUDE_HOLD_NOTE"'
+'"$CLAUDE_FN"
 
 # --- 3b. teach agent-yes to answer permission dialogs with "don't ask again" -----------------
 # Stock agent-yes only ever presses Enter, and Enter takes whatever the dialog cursor is
@@ -234,16 +272,22 @@ fi
 # --- 4. macOS helper payloads + keep-awake helpers ------------------------------------------
 # Copy the privileged helper payloads out of the plugin cache so they remain available after a
 # marketplace refresh. Installing/removing them still requires one explicit sudo each.
-mkdir -p "$AGENT_MAC_HOME"
 install -m 0755 "$SCRIPT_DIR/smart-lid-daemon.sh" "$AGENT_MAC_HOME/smart-lid-daemon.sh"
 install -m 0755 "$SCRIPT_DIR/install-smart-lid.sh" "$AGENT_MAC_HOME/install-smart-lid.sh"
 install -m 0755 "$SCRIPT_DIR/disable-crash-dialogs.sh" "$AGENT_MAC_HOME/disable-crash-dialogs.sh"
 echo "  macOS helpers: staged payload at $AGENT_MAC_HOME"
 
+# With the Codex hooks registered, codex needs no wrapper: its turns are held by the hooks.
+if [ "$codex_hooks" = 1 ]; then
+  CODEX_FN='# codex: held awake per turn by the agent-hold hooks in ~/.codex/hooks.json (approve them once in /hooks).'
+else
+  CODEX_FN='codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }'
+fi
 upsert_block "keep-awake" '# Keep long agent runs alive on macOS. caffeinate stops idle/display/system sleep;
-# `lidawake smart-on` adds order-aware behavior: close-first stays awake; lock-first then close sleeps.
+# `lidawake smart-on` adds order-aware behavior: close-first stays awake (and sleeps once nothing
+# needs it awake any more); lock-first then close sleeps.
 awake() { caffeinate -dimsu "$@"; }                          # run any command with no idle sleep
-codex() { if command -v caffeinate >/dev/null 2>&1; then caffeinate -dimsu codex "$@"; else command codex "$@"; fi; }
+'"$CODEX_FN"'
 lidawake() {
   local sl="'"$AGENT_MAC_HOME"'/install-smart-lid.sh"
   case "${1:-status}" in
@@ -279,6 +323,10 @@ crashdialogs() {
 echo
 echo "Done. Open a NEW terminal (or run: exec \$SHELL) for the changes to take effect."
 echo "Recommended smart behavior (asks once for your password): lidawake smart-on"
-echo "  close lid first -> stays awake; lock first, then close -> sleeps"
+echo "  close lid first -> stays awake until the work is done; lock first, then close -> sleeps"
+if [ "$codex_hooks" = 1 ]; then
+  echo "Codex: open codex once and approve the agent-hold hooks in /hooks — until then Codex"
+  echo "  skips them, and a closed-lid Mac can sleep while a Codex turn is still running."
+fi
 echo "Optional (asks once for your password): crashdialogs off"
 echo "  silences 'quit unexpectedly' alerts from crashing headless browsers, for every app"

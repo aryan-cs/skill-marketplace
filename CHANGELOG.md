@@ -4,6 +4,38 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-09
+
+### Added
+- **`setup-agent-mac` smart-lid: a closed lid sleeps once the work is done.** A close-first session used to keep the Mac awake until the lid opened or the battery reached 20%, however long ago the agent finished. The daemon now samples `pmset -g assertions` every 30 s while the lid is closed. Once nothing has needed the Mac awake for five minutes it enters `closed-idle-sleep` and restores `disablesleep 0` and `sleepnow`, at any charge.
+  - **What counts as work:** an idle-sleep assertion from any process, powerd's "display is on" (an external display in use), or keyboard/trackpad input. That covers agent turns, the Claude app's keep-awake while a desktop or Remote Control session works, `awake`, and audio.
+  - **What doesn't:** powerd's other assertions, Handoff, and display-only wake locks.
+  - An unreadable sample counts as busy, and the low-battery cutoff still wins.
+  - Configure with `SMART_LID_IDLE_SLEEP_SECONDS` (default 300, 0 disables) and `SMART_LID_ACTIVITY_CHECK_SECONDS`.
+  - `lidawake status` gains an `activity=` line naming what is keeping a closed lid awake.
+- **Turn-scoped keep-awake for Claude Code and Codex.** The `claude()`/`codex()` wrappers held `caffeinate -dimsu` for the whole session, so an open session that had finished its task looked busy forever. `setup.sh` now registers `scripts/agent-hold.sh` as hooks, merged into the existing files by `scripts/agent-hooks.js` (JavaScript for Automation, so no python3/jq):
+  - **Claude Code** (`~/.claude/settings.json`): `UserPromptSubmit` and `PreToolUse` hold `caffeinate -i -w <agent>` (a live hold is reused, so a turn that resumed without a prompt is held from its first tool call), and `Stop`, `StopFailure`, `SessionEnd` and the `idle_prompt` notification release it.
+  - **Codex** (`~/.codex/hooks.json`): the same, with `Interrupt` in place of the last two. Codex runs the hooks only once they are approved in `/hooks`.
+  - **The hold is tied to its session.** It belongs to the CLI that ran the hook, which is its direct parent: the native binary, or `node` running an npm install. So it can never outlive the session. The hook prints nothing and always exits 0.
+  - **Settings files are handled with care.** The merge is atomic and goes through a symlink rather than over it. It keeps the file's permissions, and the backup gets the same ones. It refuses a `hooks` value that isn't an object, and it doesn't rewrite a file it has nothing to change in.
+  - **The wrappers drop their whole-session hold.** `setup.sh` falls back to the old wrappers if a settings file can't be updated.
+  - `verify.sh` checks the Claude hooks are registered.
+- New `tests/test-agent-hold.sh`. It covers:
+  - the hook, driven by a stand-in agent process: one hold per agent, released only by its own stop, none while the low-battery flag is set, and an npm (`node`) install recognised;
+  - registration: idempotent, keeps the user's other hooks, exact uninstall, leaves an invalid file untouched, writes through a symlink, keeps permissions (backup included), and doesn't rewrite a file with nothing to change;
+  - the wrappers `setup.sh` writes, including the fallback.
+- `tests/test-smart-lid.sh` gains eight cases covering:
+  - the idle window, and work resuming;
+  - unknown samples;
+  - a late lock, the lid opening, and disabling the feature;
+  - the battery cutoff's precedence, and a restart;
+  - the assertion parser, against realistic `pmset` output;
+  - the live daemon loop, both idle and busy.
+
+### Changed
+- **A low-battery recovery no longer re-arms an agent turn's hold.** The turn may have ended in the meantime, and a re-armed hold would then keep a finished session awake. A turn still running re-takes its hold at its next tool call. While the battery latch is held, a world-readable flag (`/var/run/com.aryangupta.smart-lid.low-battery`) stops the hooks taking new holds. Whole-command holds are re-armed as before.
+- The idle window counts at most two check intervals per sample, so a forward clock step can't cut it short.
+- `tests/test-agent-yes-config.sh` now points `setup.sh` at temporary Claude/Codex settings files. Otherwise running it would have registered hooks in the real ones.
 ## [0.13.3] - 2026-10-09
 
 ### Fixed
