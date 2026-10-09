@@ -4,6 +4,17 @@ All notable changes to the `personal` plugin are recorded here. This project fol
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-08
+
+### Fixed
+- **`setup-agent-mac` smart-lid: the low-battery cutoff put the Mac to sleep in the middle of use.** The lid-open guard from [#9](https://github.com/aryan-cs/skill-marketplace/issues/9) took the closed-lid response along with it, so a Mac being used on battery called `pmset sleepnow` the moment it reached 20%. Handing sleep back to macOS (`disablesleep 0` plus the `caffeinate` release) was all that #9 needed; the forced sleep is now requested only when the lid is closed. An open-lid Mac keeps working and sleeps normally on idle or when the lid closes, and macOS's own critical-battery handling applies because `disablesleep` is no longer pinned. `battery-unavailable-sleep` follows the same rule.
+- **Reopening the lid at low battery re-armed keep-awake, then slept again about a minute later.** A lid transition replaced the `low-battery-sleep` latch with `unlocked-open` (`disablesleep 1`), and the next periodic battery check tripped the cutoff again. The latch is now checked before lid transitions: opening the lid keeps it without forcing sleep, closing it requests sleep at once, and it is still released only by AC power or recovery above the cutoff. A lid event samples the battery first, so plugging in and then closing the lid still starts a close-first session (or, after a lock, sleeps) instead of sleeping on a stale reading.
+- **A latched safety state forked `pmset -g batt` every 0.1 s.** With the lid open the latch can now last as long as the remaining battery, so it samples on the retry cadence (about every five seconds) instead.
+- **`battery-unavailable-sleep` now releases the `caffeinate` holds too.** Only the low-battery entry did; that went unnoticed while the state always forced `sleepnow`, but with the lid open the wrappers' holds would otherwise keep the Mac awake.
+- **A second cutoff in one daemon lifetime could hold the Mac awake for good.** Holds restored on recovery run as `caffeinate -dimsu -w PID` children of the daemon, so releasing them again recorded the daemon as the session, and the next recovery ran `caffeinate -w <daemon>`, which never exits. The release now records a hold's `-w` target when it has one, reading only caffeinate's own options so a wrapped `claude -w NAME` is not mistaken for one.
+- A transient lid/lock sensor failure dropped the battery latch without resetting the sampling cadence, so the Mac could be held awake for up to a minute at low battery once the sensors returned. It now re-samples immediately.
+- `tests/test-smart-lid.sh`: the cases that asserted `sleepnow=1` for an open lid now assert the opposite, plus new cases for the latch surviving lid events, lid events sampling first (plug in then close, closed+locked together, lock-first, still low), the latched sampling cadence, the `-w` target on re-release, the release on telemetry failure, and an applied-`pmset` run with the lid open that must never log `sleepnow`.
+
 ## [0.13.0] - 2026-09-04
 
 ### Added

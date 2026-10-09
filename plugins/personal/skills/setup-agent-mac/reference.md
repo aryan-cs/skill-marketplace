@@ -259,7 +259,8 @@ first**, because closing the lid can itself make `IOConsoleLocked` change to `Ye
 |---|---|---|
 | Lid closes while unlocked | Keep awake (`disablesleep 1`) | This was an intentional close-first agent session; a later automatic lock is ignored until the lid opens. |
 | Touch ID/power locks while lid is open, then lid closes | Restore sleep and request it immediately (`disablesleep 0`, `pmset sleepnow`) | The explicit lock-first transition arms normal clamshell sleep. |
-| Mac on battery reaches 20%, lid open **or** closed | Restore sleep, release `caffeinate` assertions, and request sleep immediately (`disablesleep 0`, `pmset sleepnow`) | This last-resort cutoff prevents a keep-awake session from draining the battery completely. |
+| Mac on battery reaches 20%, lid closed | Restore sleep, release `caffeinate` assertions, and request sleep immediately (`disablesleep 0`, `pmset sleepnow`) | This last-resort cutoff prevents a keep-awake session from draining the battery completely. |
+| Mac on battery reaches 20%, lid open | Restore sleep and release `caffeinate` assertions (`disablesleep 0`), without `pmset sleepnow` | Someone may be using the Mac; it now sleeps normally on idle or when the lid closes. |
 | Lid reopens while still locked | Restore normal sleep (`disablesleep 0`) | The close-first session has ended. |
 | Sensors are unavailable or startup is ambiguously closed+locked | Restore normal sleep (`disablesleep 0`) | Failure is conservative: it never leaves an unknown lidded machine forced awake. |
 
@@ -271,11 +272,17 @@ the two macOS state signals.
 
 Whenever the daemon is holding the Mac awake, it checks `pmset -g batt` about once per minute, and immediately
 when a keep-awake period begins so a Mac already at the cutoff does not wait for the periodic check. If the Mac
-is drawing from **Battery Power** at 20% or below, it enters `low-battery-sleep`, restores `disablesleep 0`,
-and calls `pmset sleepnow`.
+is drawing from **Battery Power** at 20% or below, it enters `low-battery-sleep` and restores `disablesleep 0`.
+With the lid closed it also calls `pmset sleepnow`.
 
 The cutoff applies in **every lid position**, not only when the lid is closed. A long agent run usually has the
 lid open, and that state pre-arms `disablesleep 1`, so exempting it left the Mac pinned awake all the way to 0%.
+Handing sleep back to macOS is all the open-lid case needs: forcing `sleepnow` there put the Mac to sleep in
+the middle of use. `low-battery-sleep` stays latched through lid events, so reopening the lid does not re-arm
+keep-awake (which would trip the cutoff again a minute later), and closing it while latched sleeps at once.
+While latched, the battery is sampled about every five seconds so plugging in releases the latch promptly, and
+a lid event samples it at once: plugging in and then closing the lid starts a close-first session (or, after a
+lock, sleeps) exactly as it would have without the latch.
 Drawing from AC never trips the cutoff at any charge, so a Mac charging from below 20% can continue a
 deliberate close-first session.
 
@@ -292,10 +299,13 @@ without needing another lid event. The released `caffeinate` holds are **re-arme
 that survived the cutoff goes back to preventing idle sleep rather than being left unprotected for the rest of
 its life. Each is restored with `caffeinate -dimsu -w PID`, which asserts on behalf of the wrapped command and
 exits by itself when that command does — so a session that ended in the meantime is skipped rather than leaking
-an assertion, and the restored hold clears itself when the session finishes. `lidawake status` reports the current power source, percentage, and cutoff
+an assertion, and the restored hold clears itself when the session finishes. A restored hold is itself a child of
+the daemon, so if a later cutoff releases it again, the session recorded for it is its `-w` target rather than its
+parent. `lidawake status` reports the current power source, percentage, and cutoff
 alongside the lock, lid, and `SleepDisabled` state. A failed battery read retries after about five seconds rather
 than waiting a minute; after three consecutive failures the daemon enters `battery-unavailable-sleep` and
-conservatively restores normal sleep, because it can no longer enforce the cutoff reliably.
+conservatively restores normal sleep, because it can no longer enforce the cutoff reliably. As with the cutoff,
+`sleepnow` is requested only when the lid is closed.
 
 The cutoff defaults to 20% and is configurable with `SMART_LID_LOW_BATTERY_PERCENT`.
 
