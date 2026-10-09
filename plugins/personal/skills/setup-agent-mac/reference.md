@@ -280,7 +280,9 @@ lid open, and that state pre-arms `disablesleep 1`, so exempting it left the Mac
 Handing sleep back to macOS is all the open-lid case needs: forcing `sleepnow` there put the Mac to sleep in
 the middle of use. `low-battery-sleep` stays latched through lid events, so reopening the lid does not re-arm
 keep-awake (which would trip the cutoff again a minute later), and closing it while latched sleeps at once.
-While latched, the battery is sampled about every five seconds so plugging in releases the latch promptly.
+While latched, the battery is sampled about every five seconds so plugging in releases the latch promptly, and
+a lid event samples it at once: plugging in and then closing the lid starts a close-first session (or, after a
+lock, sleeps) exactly as it would have without the latch.
 Drawing from AC never trips the cutoff at any charge, so a Mac charging from below 20% can continue a
 deliberate close-first session.
 
@@ -297,7 +299,9 @@ without needing another lid event. The released `caffeinate` holds are **re-arme
 that survived the cutoff goes back to preventing idle sleep rather than being left unprotected for the rest of
 its life. Each is restored with `caffeinate -dimsu -w PID`, which asserts on behalf of the wrapped command and
 exits by itself when that command does — so a session that ended in the meantime is skipped rather than leaking
-an assertion, and the restored hold clears itself when the session finishes. `lidawake status` reports the current power source, percentage, and cutoff
+an assertion, and the restored hold clears itself when the session finishes. A restored hold is itself a child of
+the daemon, so if a later cutoff releases it again, the session recorded for it is its `-w` target rather than its
+parent. `lidawake status` reports the current power source, percentage, and cutoff
 alongside the lock, lid, and `SleepDisabled` state. A failed battery read retries after about five seconds rather
 than waiting a minute; after three consecutive failures the daemon enters `battery-unavailable-sleep` and
 conservatively restores normal sleep, because it can no longer enforce the cutoff reliably. As with the cutoff,
