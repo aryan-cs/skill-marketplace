@@ -46,6 +46,7 @@ unload_service() {
     [ "$attempt" -lt "$VERIFY_ATTEMPTS" ] || return 1
     "$SLEEP_BIN" "$VERIFY_DELAY"
   done
+  return 0
 }
 
 write_plist() {
@@ -100,22 +101,24 @@ install_daemon() {
     transaction_active=1
     rollback_install() {
       local result=$?
-      trap - EXIT HUP INT TERM
+      trap - EXIT
+      # Rolling back now waits on launchd, so a Ctrl-C must not abort it halfway.
+      trap '' HUP INT TERM
       if [ "$transaction_active" = 1 ] && [ "$committed" = 0 ]; then
         echo "Install failed; rolling back the previous smart-lid service." >&2
         # Wait for the teardown to land: bootstrapping the previous service while
         # the label is still loaded fails, leaving no service once teardown ends.
-        local unloaded=1
-        if ! unload_service; then
-          unloaded=0
-          echo "WARNING: the smart-lid service did not unload during rollback; check it with: sudo launchctl print system/$LABEL" >&2
-        fi
-        rm -f "$DAEMON_DEST" "$PLIST_DEST"
-        if [ "$had_daemon" = 1 ]; then mv "$daemon_backup" "$DAEMON_DEST"; fi
-        if [ "$had_plist" = 1 ]; then mv "$plist_backup" "$PLIST_DEST"; fi
-        if [ "$unloaded" = 1 ] && [ "$was_loaded" = 1 ] && [ "$had_plist" = 1 ]; then
-          "$LAUNCHCTL" bootstrap system "$PLIST_DEST" >/dev/null 2>&1 \
-            || echo "WARNING: could not restart the previous smart-lid service; run: sudo launchctl bootstrap system $PLIST_DEST" >&2
+        if unload_service; then
+          rm -f "$DAEMON_DEST" "$PLIST_DEST"
+          if [ "$had_daemon" = 1 ]; then mv "$daemon_backup" "$DAEMON_DEST"; fi
+          if [ "$had_plist" = 1 ]; then mv "$plist_backup" "$PLIST_DEST"; fi
+          if [ "$was_loaded" = 1 ] && [ "$had_plist" = 1 ]; then
+            "$LAUNCHCTL" bootstrap system "$PLIST_DEST" >/dev/null 2>&1 \
+              || echo "WARNING: could not restart the previous smart-lid service; run: sudo launchctl bootstrap system $PLIST_DEST" >&2
+          fi
+        else
+          # Like uninstall, never remove the files of a job that is still loaded.
+          echo "WARNING: the smart-lid service did not unload during rollback, so its files were left in place; check it with: sudo launchctl print system/$LABEL" >&2
         fi
         "$PMSET" -a disablesleep 0 >/dev/null 2>&1 || true
       fi
