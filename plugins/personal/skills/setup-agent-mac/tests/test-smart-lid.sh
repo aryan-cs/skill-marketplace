@@ -646,13 +646,22 @@ case "${1:-}" in
       fi
     fi
     [ -e "$service_state" ] || exit 113
-    printf 'state = running\n'
+    if [ "${FAKE_LAUNCHCTL_NEVER_RUNNING:-0}" = 1 ]; then
+      printf 'state = waiting\n'
+    else
+      printf 'state = running\n'
+    fi
     ;;
   bootout)
     [ -e "$service_state" ] || exit 3
     : > "$pending"
     ;;
   bootstrap)
+    # Like launchd, refuse a label that is still loaded, teardown pending or not.
+    if [ -e "$service_state" ]; then
+      printf 'bootstrap-refused\n' >> "${FAKE_LAUNCHCTL_LOG:?}"
+      exit 5
+    fi
     rm -f "$pending" "$counter"
     : > "$service_state"
     ;;
@@ -714,6 +723,28 @@ fi
 if ls "$async_root/Library/LaunchDaemons/"*.backup.* >/dev/null 2>&1; then
   fail "rollback left .backup temp files behind"
 fi
+
+echo "== rollback waits for the new service's teardown before restoring the previous one =="
+# Bootstrapping the previous service straight after bootout hits a label that is still
+# loaded, so it fails; once the teardown lands, nothing is loaded at all.
+rollback_env=("${async_env[@]}" SMART_LID_TEST_ROOT="$TMP/rollback-root"
+  FAKE_LAUNCHCTL_STATE="$TMP/launchctl-state-rollback")
+env "${rollback_env[@]}" "$INSTALLER" install >/dev/null
+: > "$TMP/launchctl-log-async"
+if env "${rollback_env[@]}" FAKE_LAUNCHCTL_NEVER_RUNNING=1 "$INSTALLER" install \
+     >/dev/null 2>"$TMP/rollback-err"; then
+  fail "installer succeeded although the new service never reached a running state"
+fi
+grep -q 'rolling back' "$TMP/rollback-err" || fail "expected a rollback, got: $(cat "$TMP/rollback-err")"
+if grep -q 'bootstrap-refused' "$TMP/launchctl-log-async"; then
+  fail "rollback bootstrapped the previous service while the label was still loaded"
+fi
+# Let any pending teardown land; the restored service must still be loaded afterwards.
+for _ in 1 2 3 4 5; do
+  env "${rollback_env[@]}" "$fake_launchctl_async" print "system/com.aryangupta.smart-lid" >/dev/null 2>&1 || true
+done
+env "${rollback_env[@]}" "$fake_launchctl_async" print "system/com.aryangupta.smart-lid" >/dev/null 2>&1 \
+  || fail "no smart-lid service is loaded after the rollback"
 
 echo "== uninstall refuses to delete files if launchctl cannot unload =="
 env "${lifecycle_env[@]}" "$INSTALLER" install >/dev/null
