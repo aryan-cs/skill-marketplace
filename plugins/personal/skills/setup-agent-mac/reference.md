@@ -337,22 +337,32 @@ five-minute window. Opening the lid ends the idle check, and so does the low-bat
 For this to work, an agent must hold the Mac awake only while it is actually working. `setup.sh` therefore
 registers `agent-hold.sh` as a hook:
 - **Claude Code**, in `~/.claude/settings.json`:
-  - `UserPromptSubmit` takes a `caffeinate -i -w <agent pid>` hold.
+  - `UserPromptSubmit` takes a `caffeinate -i -w <agent pid>` hold. `PreToolUse` takes it too, reusing a live one,
+    so a turn that resumed without a prompt (a background task finished) is held from its first tool call.
   - `Stop` releases it, and so do `StopFailure`, `SessionEnd`, and the `idle_prompt` notification, which catch
     turns that end without a `Stop`.
 - **Codex**, in `~/.codex/hooks.json`: the same scheme, with `Interrupt` instead of the last two.
 
 `agent-hooks.js` merges these into the existing files, leaving other keys and hooks alone. It is JavaScript for
-Automation, which is always present on macOS, so no python3 or jq is needed. The whole-session `caffeinate` in
+Automation, which is always present on macOS, so no python3 or jq is needed. It writes atomically, through a
+symlink rather than over it (a dotfiles-managed `settings.json` keeps its link), keeps the file's permissions
+(0600 for a new one), and keeps the previous contents beside the real file as `settings.json.agent-hold.bak`
+with the same permissions. It refuses a file that is not valid JSON or whose `hooks` is not an object, and it
+does not rewrite a file it has nothing to add to or remove from. Only the exact commands it writes count as
+its own. The whole-session `caffeinate` in
 the `claude()`/`codex()` wrappers is then dropped, so a session that finished its task and sits open at its
 prompt holds nothing.
 
 Details of the hook:
 - **Tied to its own session.** The hook holds on behalf of the CLI process that ran it, which is its direct
-  parent, so a hold can never outlive its session. It prints nothing, since `UserPromptSubmit` stdout is
-  injected into the conversation, and it always exits 0.
-- **Re-armed holds.** If the low-battery cutoff released a turn's hold and recovery re-armed it, the daemon runs
-  the re-armed hold as the session's user, so that turn's `Stop` releases it too.
+  parent (a shell in between is allowed), so a hold can never outlive its session. That process is the native
+  `claude` or `codex` binary, or `node` running an npm install of either. It prints nothing, since
+  `UserPromptSubmit` stdout is injected into the conversation, and it always exits 0.
+- **The low-battery cutoff.** The cutoff releases turn holds like any other `caffeinate`, and while its latch is
+  held the daemon keeps a world-readable flag at `/var/run/com.aryangupta.smart-lid.low-battery` that stops the
+  hook taking new ones. On recovery a turn hold is not re-armed, because the turn may have ended in the
+  meantime and a re-armed hold would then keep a finished session awake. A turn still running takes a fresh
+  hold at its next tool call. Whole-command holds (`awake`, and the fallback wrappers) are re-armed as before.
 
 `lidawake status` prints an `activity=` line showing what is keeping a closed lid awake, such as
 `busy: Claude (Electron)`, `busy: caffeinate (caffeinate command-line tool)`, or `idle`. The system log shows
@@ -373,6 +383,12 @@ Limits:
 - **The Claude app's keep-awake** is the Code-tab setting "Keep computer awake while Claude works". While it is
   holding, a closed lid stays awake. If `lidawake status` keeps reporting `busy: Claude (Electron)` with no
   session working, that setting is the one to check.
+- **Another `Stop` hook that blocks** (returns `decision: block`) makes the agent keep going after agent-hold
+  has already released the turn's hold. The continued turn is held again from its next tool call.
+- **A Mac asleep can't take a remote prompt.** A session driven from another device (Remote Control, a
+  messaging channel) and waiting for its next prompt holds nothing, so a closed lid sleeps after five minutes
+  and the next message waits until the Mac wakes. Raise `SMART_LID_IDLE_SLEEP_SECONDS`, or set it to 0, if
+  you drive sessions that way with the lid closed.
 
 Smart mode pre-arms `disablesleep 1` whenever the lid is open and the console is unlocked, because enabling it
 only after lid closure may be too late. Consequently, ordinary system sleep is suppressed in that state too.
@@ -493,6 +509,15 @@ To remove Bun: `rm -rf ~/.bun`. If smart-lid mode was installed, run
 normal sleep. If crash dialogs were suppressed, run `crashdialogs on` before removing the
 `# >>> crash-dialogs >>>` block — the `launchctl disable` it performed lives in launchd's database, not
 in the shell profile, so deleting the block alone leaves the agent disabled with no convenient way back.
+
+Remove the agent-hold hooks before deleting `~/.local/share/setup-agent-mac`, or both CLIs will keep calling a
+script that is gone. Your other hooks and settings are left as they are:
+
+```bash
+h=~/.local/share/setup-agent-mac
+osascript -l JavaScript "$h/agent-hooks.js" uninstall ~/.claude/settings.json "$h/agent-hold.sh" claude
+osascript -l JavaScript "$h/agent-hooks.js" uninstall ~/.codex/hooks.json "$h/agent-hold.sh" codex
+```
 
 **Migrating from `setup-claude-code`:** the staged payload moved from `~/.local/share/setup-claude-code`
 to `~/.local/share/setup-agent-mac`. Re-running `setup.sh` stages the helpers at the new path and rewrites

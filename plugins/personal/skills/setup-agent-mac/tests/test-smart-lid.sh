@@ -5,6 +5,8 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$SKILL_DIR/scripts/smart-lid-daemon.sh"
 INSTALLER="$SKILL_DIR/scripts/install-smart-lid.sh"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-smart-lid.XXXXXX")"
+# Keep the daemon's low-battery flag (read by agent-hold.sh) inside the test dir.
+export SMART_LID_LOW_BATTERY_FLAG="$TMP/low-battery-flag"
 background_pids=""
 cleanup() {
   local pid
@@ -288,6 +290,43 @@ if grep -q -- "-w 9999" "$caff_log"; then
   fail "the wrapped command's own -w argument was mistaken for a caffeinate target"
 fi
 
+echo "== an agent turn's hold is released at the cutoff but never re-armed =="
+# agent-hold.sh holds `caffeinate -i -w AGENT` per turn. The turn may end before power
+# returns, and re-arming it would then keep a finished session awake; a turn still
+# running re-takes its hold through the hook at its next tool call instead.
+fake_ps_turn="$TMP/fake-ps-turn"
+cat > "$fake_ps_turn" <<'SH'
+#!/bin/bash
+case "$2:$4" in
+  args=:4242) printf '/usr/bin/caffeinate -i -w 4142\n' ;;
+  args=:*) printf '/usr/bin/caffeinate -dimsu\n' ;;
+  ppid=:*) printf '  %s\n' "$(( $4 - 100 ))" ;;
+esac
+SH
+chmod +x "$fake_ps_turn"
+: > "$kill_log"; : > "$caff_log"
+out="$(printf '0 0 battery 5\n0 0 ac 60\n' | FAKE_KILL_LOG="$kill_log" \
+  SMART_LID_RELEASE_CAFFEINATE=1 \
+  FAKE_CAFFEINATE_LOG="$caff_log" SMART_LID_PGREP="$fake_pgrep" SMART_LID_KILL="$fake_kill" \
+  SMART_LID_CAFFEINATE="$fake_caffeinate" SMART_LID_PS="$fake_ps_turn" \
+  SMART_LID_STATE_FILE="$TMP/state-caffeinate-turn" "$DAEMON" simulate)"
+sleep 0.5
+grep -q -- "-TERM 4242" "$kill_log" || fail "the turn's hold should still be released at the cutoff"
+grep -q -- "-dimsu -w 4143" "$caff_log" || fail "a whole-command hold should be re-armed: $(cat "$caff_log")"
+if grep -q -- "-w 4142" "$caff_log"; then fail "an agent turn's hold was re-armed"; fi
+
+echo "== the low-battery flag tracks the latch =="
+flag="$TMP/flag-tracks-latch"
+printf '0 0 battery 10\n' | SMART_LID_LOW_BATTERY_FLAG="$flag" \
+  SMART_LID_STATE_FILE="$TMP/state-flag-on" "$DAEMON" simulate >/dev/null 2>&1
+[ -e "$flag" ] || fail "no low-battery flag while latched"
+[ "$(stat -f '%Lp' "$flag")" = 644 ] || fail "agent-hold.sh must be able to read the flag"
+printf '0 0 battery 10\n0 0 ac 10\n' | SMART_LID_LOW_BATTERY_FLAG="$flag" \
+  SMART_LID_STATE_FILE="$TMP/state-flag-off" "$DAEMON" simulate >/dev/null 2>&1
+[ ! -e "$flag" ] || fail "the low-battery flag outlived the latch"
+printf '0 0 battery 10\n' | SMART_LID_LOW_BATTERY_FLAG="" \
+  SMART_LID_STATE_FILE="$TMP/state-flag-none" "$DAEMON" simulate >/dev/null 2>&1
+
 echo "== battery telemetry failure with the lid open still releases caffeinate holds =="
 # With the lid open no sleepnow follows, so the wrappers' holds are all that
 # would keep the Mac awake.
@@ -479,6 +518,16 @@ echo "== the low-battery cutoff still wins while idle-timing a closed lid =="
 out="$(printf '0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 battery 15 idle\n' | \
   env "${idle_env[@]}" SMART_LID_STATE_FILE="$TMP/state-idle-battery" "$DAEMON" simulate 2>/dev/null)"
 assert_line "$out" 3 "phase=low-battery-sleep disablesleep=0 sleepnow=1"
+
+echo "== a clock step cannot cut the idle window short =="
+# $SECONDS follows the wall clock. With 10-minute steps between samples, each idle
+# sample may count for at most two check intervals (60s), so 300s takes six samples.
+out="$(printf '0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n0 1 ac 100 idle\n' | \
+  env "${idle_env[@]}" SMART_LID_SIMULATION_STEP_SECONDS=600 \
+  SMART_LID_STATE_FILE="$TMP/state-idle-clockstep" "$DAEMON" simulate 2>/dev/null)"
+assert_line "$out" 2 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+assert_line "$out" 5 "phase=closed-keep-awake disablesleep=1 sleepnow=0"
+assert_line "$out" 6 "phase=closed-idle-sleep disablesleep=0 sleepnow=1"
 
 echo "== a daemon restart re-earns a pending idle sleep instead of replaying it =="
 state="$TMP/state-idle-restart"

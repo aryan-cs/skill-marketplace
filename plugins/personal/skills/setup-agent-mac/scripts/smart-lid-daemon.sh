@@ -28,7 +28,10 @@ RECOVERY_MARGIN_PERCENT="${SMART_LID_RECOVERY_MARGIN_PERCENT:-5}"
 IDLE_SLEEP_SECONDS="${SMART_LID_IDLE_SLEEP_SECONDS:-300}"
 ACTIVITY_CHECK_SECONDS="${SMART_LID_ACTIVITY_CHECK_SECONDS:-30}"
 SIMULATION_STEP_SECONDS="${SMART_LID_SIMULATION_STEP_SECONDS:-60}"
-SUDO_BIN="${SMART_LID_SUDO:-/usr/bin/sudo}"
+# While a battery latch is held, this world-readable flag tells agent-hold.sh not
+# to take new holds: the cutoff released them so the Mac can sleep, and an agent
+# hook would otherwise re-arm one at its next tool call.
+LOW_BATTERY_FLAG="${SMART_LID_LOW_BATTERY_FLAG-/var/run/com.aryangupta.smart-lid.low-battery}"
 # `caffeinate CMD` runs CMD as its PARENT and re-execs itself as a child, so
 # signalling the caffeinate PID drops its sleep assertion while the wrapped
 # command keeps running. Never signal the parent or a process group: that would
@@ -63,8 +66,10 @@ simulation_power_source=""
 simulation_battery_percent=""
 simulation_activity=""
 simulation_clock=0
-idle_since=""
+idle_elapsed=""
+last_idle_check=0
 next_activity_check=0
+low_battery_flag_state=""
 
 validate_positive_integer() {
   local name="$1" value="$2"
@@ -392,7 +397,7 @@ transition_state() {
 release_caffeinate_assertions() {
   [ "$RELEASE_CAFFEINATE" = 1 ] || return 0
   [ -x "$PGREP" ] || return 0
-  local pids pid target released=0
+  local pids pid args target agent_turn released=0
   pids="$("$PGREP" -x caffeinate 2>/dev/null)" || return 0
   [ -n "$pids" ] || return 0
   for pid in $pids; do
@@ -405,16 +410,23 @@ release_caffeinate_assertions() {
     # `caffeinate -w <daemon>`, a hold that never ends. Otherwise caffeinate
     # wraps its parent. Only caffeinate's own options are read: the scan stops
     # at the wrapped command, whose arguments (`claude -w NAME`) are not ours.
-    target="$("$PS_BIN" -o args= -p "$pid" 2>/dev/null | awk '{
+    args="$("$PS_BIN" -o args= -p "$pid" 2>/dev/null)"
+    target="$(awk '{
       for (i = 2; i <= NF; i++) {
         if ($i == "-w") { if (i < NF) print $(i + 1); exit }
         if ($i == "-t") { i++; continue }
         if ($i !~ /^-[dimsu]+$/) exit
       }
-    }')"
+    }' <<<"$args")"
     [ -n "$target" ] || target="$("$PS_BIN" -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    # An agent turn's hold (agent-hold.sh: `caffeinate -i -w AGENT`) is not
+    # re-armed on recovery: the turn may have ended in the meantime, and if it
+    # has not, its next tool call takes a fresh hold through the hook.
+    agent_turn=0
+    case "$args" in *"caffeinate -i -w $target") agent_turn=1 ;; esac
     if "$KILL_BIN" -TERM "$pid" 2>/dev/null; then
       released=$((released + 1))
+      [ "$agent_turn" = 0 ] || continue
       case "$target" in
         ''|*[!0-9]*) ;;
         *) [ "$target" -gt 1 ] \
@@ -432,7 +444,7 @@ release_caffeinate_assertions() {
 # in the meantime is skipped rather than leaking an assertion forever.
 restore_caffeinate_assertions() {
   [ -n "$released_caffeinate_targets" ] || return 0
-  local pid uid restored=0
+  local pid restored=0
   if [ "$RELEASE_CAFFEINATE" != 1 ] || [ ! -x "$CAFFEINATE" ]; then
     released_caffeinate_targets=""
     return 0
@@ -441,18 +453,8 @@ restore_caffeinate_assertions() {
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     # Only re-arm sessions that are still alive.
     "$KILL_BIN" -0 "$pid" 2>/dev/null || continue
-    # Detached on purpose: caffeinate -w blocks until the target exits. Run it as
-    # the session's own user, so the agent-hold hook can release it when the
-    # agent's turn ends instead of it holding the Mac until the session exits.
-    uid="$("$PS_BIN" -o uid= -p "$pid" 2>/dev/null | tr -d ' ')"
-    case "$uid" in
-      ''|*[!0-9]*|0) uid="" ;;
-    esac
-    if [ "$EUID" = 0 ] && [ -n "$uid" ]; then
-      "$SUDO_BIN" -n -u "#$uid" "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
-    else
-      "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
-    fi
+    # Detached on purpose: caffeinate -w blocks until the target exits.
+    "$CAFFEINATE" -dimsu -w "$pid" >/dev/null 2>&1 &
     restored=$((restored + 1))
   done
   released_caffeinate_targets=""
@@ -601,7 +603,7 @@ enforce_low_battery_sleep() {
 enforce_closed_idle_sleep() {
   [ "$IDLE_SLEEP_SECONDS" -gt 0 ] || return 0
   if [ "$phase" != "closed-keep-awake" ]; then
-    idle_since=""
+    idle_elapsed=""
     next_activity_check=0
     return 0
   fi
@@ -609,7 +611,7 @@ enforce_closed_idle_sleep() {
   if [ "$simulation_mode" = 1 ] && [ -z "$simulation_activity" ]; then
     return 0
   fi
-  local now="$SECONDS" activity rc
+  local now="$SECONDS" activity rc step
   [ "$simulation_mode" != 1 ] || now="$simulation_clock"
   [ "$now" -ge "$next_activity_check" ] || return 0
   next_activity_check=$((now + ACTIVITY_CHECK_SECONDS))
@@ -618,23 +620,44 @@ enforce_closed_idle_sleep() {
   rc=$?
   if [ "$rc" != 1 ]; then
     # Busy, or unknown: an unreadable sample must never sleep a Mac mid-task.
-    if [ -n "$idle_since" ]; then
+    if [ -n "$idle_elapsed" ]; then
       log "work resumed with the lid closed: ${activity:-activity unknown}"
     fi
-    idle_since=""
+    idle_elapsed=""
     return 0
   fi
-  if [ -z "$idle_since" ]; then
-    idle_since="$now"
+  if [ -z "$idle_elapsed" ]; then
+    idle_elapsed=0
     log "lid closed and nothing needs the Mac awake; sleeping in ${IDLE_SLEEP_SECONDS}s unless work resumes"
+  else
+    # Count only plausible time between samples: $SECONDS follows the wall clock,
+    # and a clock step must not cut the window short.
+    step=$((now - last_idle_check))
+    [ "$step" -ge 0 ] || step=0
+    [ "$step" -le $((2 * ACTIVITY_CHECK_SECONDS)) ] || step=$((2 * ACTIVITY_CHECK_SECONDS))
+    idle_elapsed=$((idle_elapsed + step))
   fi
-  [ $((now - idle_since)) -ge "$IDLE_SLEEP_SECONDS" ] || return 0
+  last_idle_check="$now"
+  [ "$idle_elapsed" -ge "$IDLE_SLEEP_SECONDS" ] || return 0
   phase="closed-idle-sleep"
   desired=0
   request_sleep=1
-  sleep_reason="lid closed and nothing has needed the Mac awake for $((now - idle_since))s"
+  sleep_reason="lid closed and nothing has needed the Mac awake for ${idle_elapsed}s"
   log "$sleep_reason; restoring normal sleep"
-  idle_since=""
+  idle_elapsed=""
+}
+
+# Keep the low-battery flag in step with the battery latch (see LOW_BATTERY_FLAG).
+sync_low_battery_flag() {
+  [ -n "$LOW_BATTERY_FLAG" ] || return 0
+  local want=0
+  case "$phase" in low-battery-sleep|battery-unavailable-sleep) want=1 ;; esac
+  [ "$want" != "$low_battery_flag_state" ] || return 0
+  if [ "$want" = 1 ]; then
+    if (umask 022; : > "$LOW_BATTERY_FLAG") 2>/dev/null; then low_battery_flag_state=1; fi
+  else
+    if rm -f "$LOW_BATTERY_FLAG" 2>/dev/null; then low_battery_flag_state=0; fi
+  fi
 }
 
 apply_power_state() {
@@ -690,6 +713,8 @@ simulate() {
   # explicit opt-in; the tests that cover the release pass SMART_LID_RELEASE_CAFFEINATE=1
   # along with mocked pgrep/kill.
   RELEASE_CAFFEINATE="${SMART_LID_RELEASE_CAFFEINATE:-0}"
+  # Likewise the low-battery flag is a real file other processes read.
+  LOW_BATTERY_FLAG="${SMART_LID_LOW_BATTERY_FLAG:-}"
   while read -r locked closed power_source battery_percent activity _; do
     [ -n "${locked:-}" ] || continue
     simulation_power_source="${power_source:-}"
@@ -699,6 +724,7 @@ simulate() {
     transition_state "$locked" "$closed"
     enforce_low_battery_sleep
     enforce_closed_idle_sleep
+    sync_low_battery_flag
     save_state
     if [ "${SMART_LID_SIMULATION_APPLY:-0}" = 1 ]; then apply_power_state; fi
     print_state
@@ -737,6 +763,7 @@ run_daemon() {
   local locked closed
   cleanup() {
     "$PMSET" -a disablesleep 0 >/dev/null 2>&1 || true
+    [ -z "$LOW_BATTERY_FLAG" ] || rm -f "$LOW_BATTERY_FLAG" 2>/dev/null || true
   }
   shutdown() {
     trap - TERM INT EXIT
@@ -756,6 +783,7 @@ run_daemon() {
       # rather than holding the Mac awake for a full interval at low battery.
       battery_check_count="$BATTERY_CHECK_LOOPS"; battery_check_target="$BATTERY_CHECK_LOOPS"
     fi
+    sync_low_battery_flag
     save_state
     apply_power_state
     "$SLEEP_BIN" "$INTERVAL"

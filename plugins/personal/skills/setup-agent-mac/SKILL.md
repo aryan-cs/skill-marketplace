@@ -72,7 +72,9 @@ relative to this SKILL.md if `CLAUDE_PLUGIN_ROOT` isn't set. Don't reinvent thei
      `awake` command or audio), it sleeps, at any charge. Claude Code and Codex hold the Mac only while a
      turn runs, through hooks `setup.sh` registers in `~/.claude/settings.json` and `~/.codex/hooks.json`.
      **Codex skips untrusted hooks**, so tell the user to open `codex` once and approve them in `/hooks`.
-     `lidawake status` shows what is keeping a closed lid awake right now.
+     `lidawake status` shows what is keeping a closed lid awake right now. A session driven from another
+     device (Remote Control, a messaging channel) waiting for its next prompt holds nothing, so tell the
+     user a sleeping Mac takes that prompt only once it wakes; `SMART_LID_IDLE_SLEEP_SECONDS` sets the window.
      Pressing Touch ID/power to lock while the lid is
      open arms normal sleep, so closing it afterward sleeps immediately. If a keep-awake session runs on
      battery and reaches 20% — **lid open or closed** — the daemon restores normal sleep and releases the
